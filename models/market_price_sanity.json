@@ -1,0 +1,32 @@
+{
+  "227": {
+    "n": 559036,
+    "mean_actual_paying_price": 109.13544923761619,
+    "mean_predicted_paying_price": 98.51963865153712
+  },
+  "238": {
+    "n": 463149,
+    "mean_actual_paying_price": 78.87653217431108,
+    "mean_predicted_paying_price": 73.67824792215374
+  },
+  "241": {
+    "n": 426883,
+    "mean_actual_paying_price": 71.91288948025571,
+    "mean_predicted_paying_price": 74.11441683439898
+  },
+  "249": {
+    "n": 121269,
+    "mean_actual_paying_price": 71.47532345446899,
+    "mean_predicted_paying_price": 64.7045562210042
+  },
+  "254": {
+    "n": 142533,
+    "mean_actual_paying_price": 68.04886587667417,
+    "mean_predicted_paying_price": 81.88719508941891
+  },
+  "300": {
+    "n": 1690187,
+    "mean_actual_paying_price": 73.92896052330305,
+    "mean_predicted_paying_price": 76.08098889221544
+  }
+}

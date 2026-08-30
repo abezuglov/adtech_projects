@@ -1,14 +1,15 @@
-"""Train the win-rate/market model (Phase 1 market simulator, price side).
+"""Train the win-rate and paying-price models (Phase 1 market simulator, price side).
 
 Checkpoints the feature-engineered full bid population (won + lost) to
 data/interim/ so a crash doesn't require re-reading the multi-GB
-train/test parquet files, and saves the trained model + metrics.
+train/test parquet files, and saves the trained models + metrics.
 """
 
 import json
 import sys
 from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import pyarrow as pa
@@ -18,11 +19,15 @@ from adtech_rtb.features import fit_category_maps  # noqa: E402
 from adtech_rtb.market_model import (  # noqa: E402
     MARKET_FEATURE_COLUMNS,
     RAW_COLUMNS,
+    compute_smear_factor,
     evaluate,
+    evaluate_price,
     predict,
     predict_at_price,
+    predict_price,
     prepare_all_bids,
     train,
+    train_price_model,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +36,7 @@ INTERIM_DIR = REPO_ROOT / "data" / "interim"
 MODELS_DIR = REPO_ROOT / "models"
 FIGURES_DIR = REPO_ROOT / "reports" / "figures"
 
-CACHE_COLUMNS = MARKET_FEATURE_COLUMNS + ["bid_id", "timestamp", "won"]
+CACHE_COLUMNS = MARKET_FEATURE_COLUMNS + ["bid_id", "timestamp", "won", "paying_price"]
 
 
 def _load_or_build_features(name: str, source_path: Path) -> pd.DataFrame:
@@ -79,15 +84,27 @@ def main() -> None:
         f"Valid ({last_day}): {len(valid_df):,} rows ({valid_df['won'].sum():,} won)"
     )
 
-    category_maps = fit_category_maps(fit_df)
-    with open(MODELS_DIR / "market_category_maps.json", "w") as f:
-        json.dump(category_maps, f)
+    category_maps_path = MODELS_DIR / "market_category_maps.json"
+    if category_maps_path.exists():
+        with open(category_maps_path) as f:
+            category_maps = json.load(f)
+    else:
+        category_maps = fit_category_maps(fit_df)
+        with open(category_maps_path, "w") as f:
+            json.dump(category_maps, f)
 
-    checkpoint_path = MODELS_DIR / "market_model_checkpoint.txt"
-    booster = train(fit_df, valid_df, category_maps, checkpoint_path=checkpoint_path)
-    checkpoint_path.unlink(missing_ok=True)
-    booster.save_model(str(MODELS_DIR / "market_model.txt"))
-    print(f"Model saved -> {MODELS_DIR / 'market_model.txt'}")
+    # --- Win-rate model (skip if already trained -- expensive, OOM-prone,
+    # and unaffected by adding the price model below) -----------------------
+    win_rate_model_path = MODELS_DIR / "market_model.txt"
+    if win_rate_model_path.exists():
+        print(f"Loading existing win-rate model from {win_rate_model_path.name}")
+        booster = lgb.Booster(model_file=str(win_rate_model_path))
+    else:
+        checkpoint_path = MODELS_DIR / "market_model_checkpoint.txt"
+        booster = train(fit_df, valid_df, category_maps, checkpoint_path=checkpoint_path)
+        checkpoint_path.unlink(missing_ok=True)
+        booster.save_model(str(win_rate_model_path))
+        print(f"Model saved -> {win_rate_model_path}")
 
     metrics = {
         "valid": evaluate(booster, valid_df, category_maps),
@@ -136,6 +153,76 @@ def main() -> None:
     print(f"Monotonic in price: {is_monotonic}")
     with open(MODELS_DIR / "market_price_response.json", "w") as f:
         json.dump({"prices": prices.tolist(), "win_rates": win_rates, "monotonic": is_monotonic}, f, indent=2)
+
+    # --- Paying-price regression (won subset only; see market_model.py) ----
+    price_model_path = MODELS_DIR / "market_price_model.txt"
+    if price_model_path.exists():
+        print(f"Loading existing price model from {price_model_path.name}")
+        price_booster = lgb.Booster(model_file=str(price_model_path))
+    else:
+        price_checkpoint_path = MODELS_DIR / "market_price_model_checkpoint.txt"
+        price_booster = train_price_model(fit_df, valid_df, category_maps, checkpoint_path=price_checkpoint_path)
+        price_checkpoint_path.unlink(missing_ok=True)
+        price_booster.save_model(str(price_model_path))
+        print(f"Price model saved -> {price_model_path}")
+
+    # Smearing correction (Duan's estimator) for the log1p<->expm1
+    # retransformation bias -- see compute_smear_factor's docstring. Must be
+    # estimated on valid_df, not test_all or the training set, or it would
+    # just be fitting the bias back in on data the correction is meant to
+    # be evaluated against.
+    smear_factor = compute_smear_factor(price_booster, valid_df, category_maps)
+    print(f"Price smear factor: {smear_factor:.4f}")
+    with open(MODELS_DIR / "market_price_smear.json", "w") as f:
+        json.dump({"smear_factor": smear_factor}, f, indent=2)
+
+    price_metrics = {
+        "valid": evaluate_price(price_booster, valid_df, category_maps, smear_factor=smear_factor),
+        "test": evaluate_price(price_booster, test_all, category_maps, smear_factor=smear_factor),
+    }
+    print(json.dumps(price_metrics, indent=2))
+    with open(MODELS_DIR / "market_price_metrics.json", "w") as f:
+        json.dump(price_metrics, f, indent=2)
+
+    # Price calibration: predicted vs actual paying price, binned by
+    # predicted price decile (won test bids only).
+    won_test = test_all[test_all["won"]]
+    y_true_price = won_test["paying_price"].to_numpy(dtype="float64")
+    y_pred_price = predict_price(price_booster, won_test, category_maps, smear_factor=smear_factor)
+    order = np.argsort(y_pred_price)
+    bins = np.array_split(order, 10)
+    mean_pred_price = [float(y_pred_price[b].mean()) for b in bins]
+    mean_true_price = [float(y_true_price[b].mean()) for b in bins]
+    fig, ax = plt.subplots(figsize=(5, 5))
+    lo, hi = min(mean_pred_price + mean_true_price), max(mean_pred_price + mean_true_price)
+    ax.plot(mean_pred_price, mean_true_price, marker="o", label="price model")
+    ax.plot([lo, hi], [lo, hi], linestyle="--", color="gray", label="perfect calibration")
+    ax.set_xlabel("Mean predicted paying price")
+    ax.set_ylabel("Mean actual paying price")
+    ax.set_title("Paying-price model calibration (test set, won bids)")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "market_price_calibration.png", dpi=150)
+    print(f"Price calibration plot -> {FIGURES_DIR / 'market_price_calibration.png'}")
+
+    # Sanity check: paying_price must be < bidding_price for every won bid
+    # (that's the win condition under GSP) -- verify the model's predictions
+    # respect that on average per bidding_price level actually used.
+    won_test_bp = won_test["bidding_price"].to_numpy(dtype="float64")
+    price_sanity = {}
+    for bp in sorted(set(won_test_bp.round().astype(int).tolist())):
+        mask = np.isclose(won_test_bp, bp, atol=0.5)
+        if mask.sum() < 100:
+            continue
+        price_sanity[str(bp)] = {
+            "n": int(mask.sum()),
+            "mean_actual_paying_price": float(y_true_price[mask].mean()),
+            "mean_predicted_paying_price": float(y_pred_price[mask].mean()),
+        }
+    print("Paying price by historical bidding_price level:")
+    print(json.dumps(price_sanity, indent=2))
+    with open(MODELS_DIR / "market_price_sanity.json", "w") as f:
+        json.dump(price_sanity, f, indent=2)
 
 
 if __name__ == "__main__":
