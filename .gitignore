@@ -1,0 +1,27 @@
+# Data
+data/raw/
+data/interim/
+*.zip
+*.7z
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Env / secrets
+.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model artifacts (regenerate via scripts, do not commit large binaries)
+*.pkl
+*.joblib
+!reports/figures/*

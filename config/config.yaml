@@ -1,0 +1,27 @@
+# Season 2 advertiser campaigns used for this project.
+# See data/README.md for the full advertiser category table and schema notes.
+advertisers:
+  - id: 1458
+    industry: "Chinese vertical e-commerce"
+    role: primary  # recurs across RTB literature; used as the main deep-dive campaign
+  - id: 3358
+    industry: "Software"
+    role: secondary
+  - id: 3386
+    industry: "International e-commerce"
+    role: secondary
+  - id: 3427
+    industry: "Oil"
+    role: secondary
+  - id: 3476
+    industry: "Tire"
+    role: warm_start_holdout  # held out as the "new campaign" for the warm-start experiment
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+
+# Campaign delivery scenarios simulated by the bandit (impressions target X, CTR floor Y).
+# Populated with real values once Phase 0 EDA confirms realistic per-campaign volumes/CTRs.
+scenarios: []
