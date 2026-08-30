@@ -23,12 +23,16 @@ Please cite both if referencing this dataset:
 
 - Hairen Liao, Lingxiao Peng, Zhenchuan Liu, Xuehua Shen. "iPinYou Global RTB Bidding Algorithm Competition Dataset." KDD'14, ACM, 2014. https://doi.org/10.1145/2648584.2648590
 - Weinan Zhang, Shuai Yuan, Jun Wang, Xuehua Shen. "Real-Time Bidding Benchmarking with iPinYou Dataset." Technical report, UCL, 2014. https://arxiv.org/abs/1407.7073
+- Mirror used for acquisition: Jiang, Zilong (2017). "ipinyou.contest.dataset season2." figshare. Dataset. https://doi.org/10.6084/m9.figshare.5732328.v1
 
 ## Dataset download
 
-- Baidu WebDrive: http://pan.baidu.com/s/1kTwX2mF
-- University College London mirror: http://data.computational-advertising.org
-- Updated links maintained at: http://contest.ipinyou.com/data-release.html
+The original UCL hosts named in iPinYou's paper are no longer reachable. This project uses a third-party archival mirror instead:
+
+- **Figshare** (used by this project): "ipinyou.contest.dataset season2," uploaded by Zilong Jiang, 2017. CC0-licensed on Figshare; DOI `10.6084/m9.figshare.5732328.v1`; https://figshare.com/articles/dataset/ipinyou_contest_dataset_season2/5732328
+- Baidu WebDrive (per the original paper, unverified reachability from this environment): http://pan.baidu.com/s/1kTwX2mF
+- Original UCL host (per the original paper, **confirmed dead**): http://data.computational-advertising.org
+- Kaggle mirrors of the same data exist (e.g. the UCL-run competitions `rtb-dsp-bidding-algorithm-contest` and `ucl-rtb-algorithm-challenge-2015`) but were not verified/used for this project.
 - Processing tooling: https://github.com/wnzhang/make-ipinyou-data
 
 For questions about the dataset itself, contact dsp-competition@ipinyou.com (per the original paper).

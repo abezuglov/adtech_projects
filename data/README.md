@@ -4,8 +4,10 @@ See `DATA_LICENSE.md` at the repo root for license/citation terms. Raw data is *
 
 ## Acquisition
 
-1. Download `ipinyou.contest.dataset.zip` from the UCL mirror (`http://data.computational-advertising.org`) or Baidu WebDrive (see `DATA_LICENSE.md` for links).
-2. Process it into per-advertiser train/test logs using `wnzhang/make-ipinyou-data` (https://github.com/wnzhang/make-ipinyou-data) — retains the raw text log format below, including `Paying Price`, which the market simulator needs.
+**Note:** the original UCL hosts named in iPinYou's own paper (`bunwell.cs.ucl.ac.uk`, `data.computational-advertising.org`) are dead as of this writing (connection timeouts, likely decommissioned academic servers). A verified-working alternative:
+
+1. Download the raw Season 2 dataset from **Figshare**: `ipinyou.contest.dataset-season2.zip` (3.61 GB, CC0-licensed, DOI `10.6084/m9.figshare.5732328.v1`, uploaded by Zilong Jiang, 2017) — direct link `https://ndownloader.figshare.com/files/10082688`, article page https://figshare.com/articles/dataset/ipinyou_contest_dataset_season2/5732328. This is a third-party mirror of iPinYou's original raw contest files, not a reprocessed/reduced version, so it retains `Paying Price` and the losing-bid population needed for the market simulator. (Other options that exist but were not used: Kaggle competition pages `rtb-dsp-bidding-algorithm-contest` / `ucl-rtb-algorithm-challenge-2015` — unverified reachability in this environment, would need a Kaggle account; Hugging Face `reczoo/iPinYou_x1` — confirmed live but reprocessed into a hashed CTR-benchmark format with no `Paying Price`, unsuitable as the primary source.)
+2. Unzip, then process into per-advertiser train/test logs using `wnzhang/make-ipinyou-data` (https://github.com/wnzhang/make-ipinyou-data) — retains the raw text log format below, including `Paying Price`.
 3. Place processed per-advertiser folders under `data/raw/<advertiser_id>/`.
 4. Run `scripts/make_dataset.py` to filter down to the campaigns selected in `config/config.yaml` and produce `data/processed/`.
 
