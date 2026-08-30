@@ -115,8 +115,26 @@ def fit_category_maps(df: pd.DataFrame) -> dict[str, dict[str, int]]:
     }
 
 
-def apply_category_maps(df: pd.DataFrame, category_maps: dict[str, dict[str, int]]) -> pd.DataFrame:
+def apply_category_maps(
+    df: pd.DataFrame,
+    category_maps: dict[str, dict[str, int]],
+    extra_numeric_columns: list[str] = (),
+) -> pd.DataFrame:
+    """Encode categoricals to int codes and (re-)normalize numeric dtypes.
+
+    The numeric-dtype normalization has to happen here too, not just in
+    build_features: reloading a cached parquet with dtype_backend="pyarrow"
+    re-Arrow-ifies numeric columns even when they were plain numpy float64
+    when written, silently undoing that fix. Every caller (train/predict/
+    evaluate) always calls this right before touching LightGBM, so fixing
+    it here covers both a freshly-built DataFrame and a cache reload.
+    `extra_numeric_columns` covers model-specific fields not in the shared
+    NUMERIC_COLUMNS list (e.g. the win-rate model's `bidding_price`).
+    """
     out = df.copy()
     for col, mapping in category_maps.items():
         out[col] = out[col].map(mapping).fillna(0).astype("int32")
+    for col in (*NUMERIC_COLUMNS, *extra_numeric_columns):
+        if col in out.columns:
+            out[col] = out[col].to_numpy(dtype="float64")
     return out
