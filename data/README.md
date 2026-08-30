@@ -1,6 +1,6 @@
 # Data Dictionary & Acquisition — iPinYou RTB Dataset
 
-See `DATA_LICENSE.md` at the repo root for license/citation terms. Raw data is **not** committed to this repo (`.gitignore` excludes `data/raw/` and `data/interim/`) — only small, derived `data/processed/` artifacts needed to reproduce results.
+See `DATA_LICENSE.md` at the repo root for license/citation terms. No data is committed to this repo (`.gitignore` excludes `data/raw/`, `data/interim/`, and `data/processed/*.parquet`) — `train.parquet`/`test.parquet` alone total ~4.6GB, well past GitHub's 100MB per-file limit. Run `scripts/download_data.py` then `scripts/make_dataset.py` to regenerate `data/processed/` locally; a small sampled subset for the Streamlit demo will be committed separately in Phase 5.
 
 ## Acquisition
 
@@ -78,6 +78,19 @@ Same columns as above, plus:
 **Win/loss derivation**: every row in the bidding log represents a bid the DSP submitted (win or lose — there's no explicit "declined to bid" record). A bid **won** iff its Bid ID appears in the impression log (Log Type 1); if it doesn't appear there, it lost. This is a real outcome label, not an inferred one.
 
 **Caveat carried into modeling**: the bidding log reflects *this DSP's own* bid volume, not the full unconstrained set of auctions the ad exchange saw — so anything built from bid density (e.g. avails/inventory-style estimates) is a proxy for iPinYou's own observed opportunity volume, not raw market avails.
+
+**Important caveat found in the dataset's own README (not mentioned in any secondary source we found)**: for this training data, "we have run five advertiser campaigns to get these logs with a fixed relatively high-price bidding strategy... which is for the purpose of getting enough impressions and their paying prices and is different from that of our internal live bidding algorithms." In other words, the historical bids in this log are **not** iPinYou's real, economically-optimized production bidding strategy — they're a deliberately aggressive, high-bid strategy designed to win more auctions and observe more paying prices for research purposes. Implications:
+- This is actually *good* for building the market/win-rate simulator: it means broader, less-biased coverage of the paying-price distribution than a normal profit-optimizing strategy would produce (fewer systematically-missing high-price auctions).
+- It means the historical bidding behavior should **not** be described as "iPinYou's real bidding strategy" in the README/naive-baseline framing — the "naive baseline" built for this project is a separate, simple strategy we define (e.g. constant bid), not a replication of what's in the log.
+- The dataset's own README also states desktop display CTR is typically **0.01%-0.2%** (matches the ~0.07-0.1% figure used in planning, now confirmed from the primary source with a wider stated range).
+
+## Verified against real downloaded data (2026-08-29)
+
+Confirmed by direct inspection of `training2nd/bid.20130606.txt.bz2` and `imp.20130606.txt.bz2`:
+- Bid log rows have exactly 21 tab-separated fields, impression/click/conversion log rows have exactly 24 — matching the schema tables above field-for-field.
+- Ad Exchange is encoded as an integer (`1` = Tanx in the sample rows seen), consistent with iPinYou's Table 2, not the string labels (`adx`/`tanx`) mentioned in some secondary documentation — **use the integer encoding**, verify string labels don't also appear elsewhere in the data.
+- A sample won impression showed `Bidding Price=227, Paying Price=207` (bid > payprice, DSP pays payprice) — confirms GSP win/payment logic end-to-end on real data.
+- All 5 configured Season 2 advertisers (1458, 3358, 3386, 3427, 3476) are present. An early 200K-row single-day sample suggested 1458 was dominant (~60%) and 3476 the sparsest — **corrected after processing the full 7-day pipeline**: per-advertiser train-split bid counts are 3427: 12.3M, 1458: 11.8M, 3386: 11.2M, 3476: 5.8M, **3358: 2.4M (actual sparsest, by a wide margin)**. `config/config.yaml` now uses **3358** as the `warm_start_holdout` campaign instead of 3476.
 
 ## Region/city and user-profile mapping files
 

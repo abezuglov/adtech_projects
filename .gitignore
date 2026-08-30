@@ -1,6 +1,7 @@
-# Data
+# Data (multi-GB; regenerate locally via scripts/download_data.py + scripts/make_dataset.py)
 data/raw/
 data/interim/
+data/processed/*.parquet
 *.zip
 *.7z
 

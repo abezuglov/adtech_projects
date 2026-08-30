@@ -6,7 +6,7 @@ advertisers:
     role: primary  # recurs across RTB literature; used as the main deep-dive campaign
   - id: 3358
     industry: "Software"
-    role: secondary
+    role: warm_start_holdout  # sparsest campaign over the full week (2.36M bids vs 5.8-12.3M for the others) -- held out as the "new campaign" for the warm-start experiment
   - id: 3386
     industry: "International e-commerce"
     role: secondary
@@ -15,7 +15,7 @@ advertisers:
     role: secondary
   - id: 3476
     industry: "Tire"
-    role: warm_start_holdout  # held out as the "new campaign" for the warm-start experiment
+    role: secondary
 
 paths:
   raw_dir: "data/raw"
