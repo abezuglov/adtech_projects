@@ -209,6 +209,22 @@ def predict_at_price(
     return predict(booster, overridden, category_maps)
 
 
+def predict_at_prices(
+    booster: lgb.Booster,
+    df: pd.DataFrame,
+    category_maps: dict[str, dict[str, int]],
+    bid_prices: np.ndarray,
+) -> np.ndarray:
+    """Per-row variant of predict_at_price -- each row in `df` can get a
+    different bid, needed by the bandit simulator (bidding.py's flat
+    baseline only ever needs one shared bid for a whole population, but a
+    contextual policy picks a different discretized level per auction).
+    """
+    overridden = df.copy()
+    overridden["bidding_price"] = np.asarray(bid_prices, dtype=float)
+    return predict(booster, overridden, category_maps)
+
+
 def evaluate(booster: lgb.Booster, df: pd.DataFrame, category_maps: dict[str, dict[str, int]]) -> dict:
     y_true = df["won"].astype(int).to_numpy()
     y_prob = predict(booster, df, category_maps)

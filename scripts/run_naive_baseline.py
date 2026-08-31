@@ -99,6 +99,7 @@ def main() -> None:
             "expected_impressions": outcome["expected_impressions"],
             "delivery_met": delivery_met,
             "expected_spend": outcome["expected_spend"],
+            "expected_clicks": outcome["expected_clicks"],
             "ctr_floor": s["ctr_floor"],
             "achieved_ctr": outcome["achieved_ctr"],
             "ctr_met": ctr_met,
