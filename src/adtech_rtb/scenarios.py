@@ -145,6 +145,9 @@ def _attempt_scenario(
         return None
 
     pool_contexts = market_model.prepare_all_bids(pool_df)
+    rate_floor = bidding.marginal_win_rate(
+        market_booster, pool_contexts, market_category_maps, bidding.DEFAULT_BID_BOUNDS[0]
+    )
     rate_ceiling = bidding.marginal_win_rate(
         market_booster, pool_contexts, market_category_maps, bidding.DEFAULT_BID_BOUNDS[1]
     )
@@ -156,10 +159,18 @@ def _attempt_scenario(
     daily_rate = len(pool_contexts) / len(TEST_DAYS)
     n_eligible_auctions = round(daily_rate * flight_length_days)
 
-    # Guaranteed reachable by construction: target_rate is a strict
-    # fraction (<1) of rate_ceiling, the same ceiling that bounds what any
-    # flat bid can achieve over this population.
-    target_rate = rng.uniform(*TARGET_WIN_RATE_FRACTION) * rate_ceiling
+    # Interior to [rate_floor, rate_ceiling], not just below rate_ceiling.
+    # The win-rate model's real price sensitivity within the historically
+    # supported 200-320 range is nearly flat (narrow real bidding_price
+    # variation in training data -- see market_model.py's docstring), so
+    # rate_floor and rate_ceiling sit close together. Sampling only "below
+    # the ceiling" (an earlier version of this function) meant almost
+    # every target ended up already cleared at the cheapest allowed bid,
+    # collapsing solve_delivery_bid to bid=floor with 2-3x over-delivery
+    # instead of a real search. Interpolating between floor and ceiling
+    # keeps the target strictly inside the achievable range, so there's
+    # always an actual bid to solve for, however narrow that band is.
+    target_rate = rate_floor + rng.uniform(*TARGET_WIN_RATE_FRACTION) * (rate_ceiling - rate_floor)
     target_impressions = max(1, round(target_rate * n_eligible_auctions))
 
     mean_ctr = float(np.mean(ctr_model.predict(ctr_booster, pool_contexts, ctr_category_maps)))

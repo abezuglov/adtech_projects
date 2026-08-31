@@ -34,7 +34,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from . import market_model
+from . import ctr_model, market_model
 
 # market_model.py's own bid-price sanity check only queried 200-320
 # RMB/CPM, the historically observed range for this dataset's ~227-300
@@ -199,4 +199,56 @@ def solve_delivery_bid(
         "achieved_win_rate": achieved_rate,
         "expected_impressions": achieved_rate * n,
         "target_reachable_in_bounds": target_rate < rate_hi,
+    }
+
+
+def evaluate_flat_bid(
+    market_booster: lgb.Booster,
+    market_category_maps: dict,
+    price_booster: lgb.Booster,
+    price_smear_factor: float,
+    ctr_booster: lgb.Booster,
+    ctr_category_maps: dict,
+    pool_contexts: pd.DataFrame,
+    bid: float,
+    n_flight: int,
+) -> dict:
+    """Expected delivery/spend/CTR a constant `bid` produces over a flight
+    of `n_flight` auctions, estimated from `pool_contexts` (the real,
+    pre-bootstrap population feeding that flight).
+
+    Per-auction expectations (win probability x price, win probability x
+    CTR) are population averages over `pool_contexts`, then scaled by
+    `n_flight` -- valid because a bootstrapped flight is a resample of
+    this same population (bootstrap_flight_contexts), so its
+    population-level expectations equal the pool's; only the sample size
+    differs. A flat bid's outcome doesn't depend on auction order or any
+    evolving state, so there's no need to materialize the (possibly
+    multi-million-row) bootstrapped flight itself just to evaluate it --
+    unlike the sequential bandit, which will actually need the
+    materialized per-auction stream (see scenarios.materialize_scenario).
+
+    `bidding_price`/`paying_price` are both RMB/CPM in this dataset (see
+    data/README.md's schema table) -- cost per 1000 impressions, not per
+    impression. price_preds is on that same RMB/CPM scale, so the actual
+    cost of a single won impression is price_preds/1000; skipping that
+    conversion would overstate spend (and CPM) by 1000x.
+    """
+    win_probs = market_model.predict_at_price(market_booster, pool_contexts, market_category_maps, bid)
+    price_preds = market_model.predict_price(
+        price_booster, pool_contexts, market_category_maps, smear_factor=price_smear_factor
+    )
+    ctr_preds = ctr_model.predict(ctr_booster, pool_contexts, ctr_category_maps)
+
+    expected_impressions = float(win_probs.mean()) * n_flight
+    expected_spend = float(np.mean(win_probs * price_preds)) / 1000.0 * n_flight
+    expected_clicks = float(np.mean(win_probs * ctr_preds)) * n_flight
+    achieved_ctr = expected_clicks / expected_impressions if expected_impressions > 0 else 0.0
+
+    return {
+        "bid": bid,
+        "expected_impressions": expected_impressions,
+        "expected_spend": expected_spend,
+        "expected_clicks": expected_clicks,
+        "achieved_ctr": achieved_ctr,
     }
