@@ -65,24 +65,50 @@ LAMBDA_CTR_MAX = LAMBDA_DELIVERY_MAX
 MIN_DELIVERED_FOR_CTR_JUDGMENT = 30
 
 
+# Convexity of the expected-pace curve (expected_cumulative = target *
+# elapsed_fraction**PACE_CONVEXITY). 1.0 = linear pace, matching an
+# earlier version of this function. Confirmed via a direct check
+# (predict_price's coefficient of variation across real auction contexts:
+# 0.4-0.54, p10-p90 spans 3-5x) that there's substantial price
+# heterogeneity within a scenario for a selective policy to exploit -- but
+# a *linear* pace target pushes lambda_delivery past the price
+# distribution's own range within the first few batches of any flight
+# (confirmed on 3427-3's trajectory: lambda_delivery=0.363 by batch 8
+# already exceeded that scenario's p99 price of ~0.22 RMB/impression),
+# which neutralizes price-based selectivity for the rest of the flight
+# and is the direct, confirmed reason CPM tracked the naive baseline so
+# closely despite the bandit's selection mechanism actually working. A
+# convex target (>1) keeps expected pace -- and therefore urgency --
+# deliberately low while a flight has ample remaining runway, so the
+# policy stays selective (skip pricier auctions, wait for cheaper ones)
+# for most of the flight, only escalating sharply as elapsed_fraction
+# approaches 1 and the deadline is genuinely close.
+PACE_CONVEXITY = 3.0
+
+
 def update_delivery_lambda(
     lambda_delivery: float,
     delivered: int,
     target_impressions: int,
     elapsed_fraction: float,
-    eta: float = 0.15,
+    eta: float = 0.5,
 ) -> float:
     """`elapsed_fraction` is time-elapsed / nominal flight length (can
     exceed 1.0 once a flight overruns its nominal length -- see
     simulator.py's contractual-delivery extension). Debt keeps rising while
     genuinely behind an *extended* pace, not just the original one.
 
-    `eta` scaled down from an earlier 5.0 to match LAMBDA_DELIVERY_MAX's
-    much smaller ceiling (1.5, not 50) -- keeps the same relative ramp-up
-    speed (reaches the cap after a similar number of batches under sustained
-    maximum pacing error) while staying in an RMB-comparable range.
+    `eta` raised from an earlier 0.15 to 0.5 to compensate for
+    PACE_CONVEXITY=3.0 making pacing_error itself much smaller for most of
+    a flight (e.g. 0.2 elapsed_fraction -> 0.008 expected-pace fraction,
+    not 0.2) -- without a compensating gain, the *catch-up* phase near the
+    deadline would ramp too slowly to actually recover a real shortfall
+    within the remaining batches.
     """
-    expected_cumulative = target_impressions * min(elapsed_fraction, 1.0) if elapsed_fraction <= 1.0 else target_impressions
+    if elapsed_fraction <= 1.0:
+        expected_cumulative = target_impressions * (elapsed_fraction**PACE_CONVEXITY)
+    else:
+        expected_cumulative = target_impressions
     pacing_error = (expected_cumulative - delivered) / max(target_impressions, 1)
     return float(min(max(lambda_delivery + eta * pacing_error, 0.0), LAMBDA_DELIVERY_MAX))
 

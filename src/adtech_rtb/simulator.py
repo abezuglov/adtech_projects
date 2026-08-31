@@ -8,10 +8,19 @@ chronological order, batch by batch, resolving each batch's outcomes
 against the *fitted* environment models and feeding them back to the
 policy for its own online learning update.
 
+Time granularity is hourly, not daily: the pacing controller's
+`elapsed_fraction` is driven by `sim_hour` (bidding.bootstrap_flight_
+contexts' finer clock, `sim_day*24 + the row's own real hour-of-day`),
+not the coarser `sim_day` an earlier version used. Daily granularity meant
+lambda_delivery only got ~15-28 update opportunities per flight (one per
+day, since many batches can share a day for a high-volume scenario) --
+confirmed too coarse for pacing.PACE_CONVEXITY's patient-early/urgent-late
+behavior to actually operate at a useful resolution.
+
 Contractual delivery: if the scenario's pre-materialized flight
-(scenarios.materialize_scenario, sorted by sim_day) runs out before the
+(scenarios.materialize_scenario, sorted by sim_hour) runs out before the
 target is met, this pulls another bootstrap chunk from the same pool
-(bidding.bootstrap_flight_contexts, continuing the sim_day count) rather
+(bidding.bootstrap_flight_contexts, continuing the sim_hour count) rather
 than stopping -- matches the "campaign doesn't get turned off until the
 contractual target is delivered" rule the user set. A hard safety cap
 (`max_overrun_multiple` x the nominal flight length) catches a policy
@@ -111,10 +120,10 @@ def simulate_flight(
         delivered = checkpoint["delivered"]
         spend = checkpoint["spend"]
         clicks = checkpoint["clicks"]
-        days_used = checkpoint["days_used"]
+        hours_used = checkpoint["hours_used"]
         stream_pos = checkpoint["stream_pos"]
         extension_round = checkpoint["extension_round"]
-        stream_day_offset = checkpoint["stream_day_offset"]
+        stream_hour_offset = checkpoint["stream_hour_offset"]
         bid_level_counts = checkpoint["bid_level_counts"]
         trajectory = checkpoint["trajectory"]
         print(
@@ -126,10 +135,10 @@ def simulate_flight(
         delivered = 0
         spend = 0.0
         clicks = 0
-        days_used = 0.0
+        hours_used = 0.0
         stream_pos = 0
         extension_round = 0
-        stream_day_offset = 0.0
+        stream_hour_offset = 0.0
         bid_level_counts = {}
         trajectory = []
 
@@ -145,17 +154,18 @@ def simulate_flight(
             region_ids=scenario["region_ids"],
             city_ids=scenario["city_ids"],
         )
-        stream["sim_day"] = stream["sim_day"] + stream_day_offset
+        stream["sim_hour"] = stream["sim_hour"] + stream_hour_offset
     capped = False
     batch_count = 0
+    nominal_hours = nominal_days * 24
 
     while delivered < target:
         if stream_pos >= len(stream):
-            if days_used >= nominal_days * max_overrun_multiple:
+            if hours_used >= nominal_hours * max_overrun_multiple:
                 capped = True
                 break
             extension_round += 1
-            stream_day_offset = days_used
+            stream_hour_offset = hours_used
             extra = bidding.bootstrap_flight_contexts(
                 df,
                 scenario["advertiser_id"],
@@ -168,7 +178,7 @@ def simulate_flight(
             if len(extra) == 0:
                 capped = True
                 break
-            extra["sim_day"] = extra["sim_day"] + stream_day_offset
+            extra["sim_hour"] = extra["sim_hour"] + stream_hour_offset
             stream = extra
             stream_pos = 0
 
@@ -208,8 +218,8 @@ def simulate_flight(
 
         policy.observe(batch_contexts, chosen_bids, won.astype(float), clicked.astype(float), price_paid)
 
-        days_used = float(batch_raw["sim_day"].max()) + 1
-        elapsed_fraction = days_used / nominal_days
+        hours_used = float(batch_raw["sim_hour"].max()) + 1
+        elapsed_fraction = hours_used / nominal_hours
         running_ctr = clicks / delivered if delivered > 0 else 0.0
         policy.lambda_delivery = pacing.update_delivery_lambda(policy.lambda_delivery, delivered, target, elapsed_fraction)
         policy.lambda_ctr = pacing.update_ctr_lambda(policy.lambda_ctr, running_ctr, ctr_floor, delivered)
@@ -219,7 +229,7 @@ def simulate_flight(
             batch_spend = float(price_paid[won].sum()) / 1000.0
             trajectory.append(
                 {
-                    "days_used": days_used,
+                    "days_used": hours_used / 24.0,
                     "cumulative_delivered": delivered,
                     "cumulative_spend": spend,
                     "batch_won": batch_won,
@@ -248,10 +258,10 @@ def simulate_flight(
                     "delivered": delivered,
                     "spend": spend,
                     "clicks": clicks,
-                    "days_used": days_used,
+                    "hours_used": hours_used,
                     "stream_pos": stream_pos,
                     "extension_round": extension_round,
-                    "stream_day_offset": stream_day_offset,
+                    "stream_hour_offset": stream_hour_offset,
                     "bid_level_counts": bid_level_counts,
                     "trajectory": trajectory,
                 },
@@ -261,6 +271,7 @@ def simulate_flight(
         checkpoint_path.unlink()  # scenario finished (or hit the overrun cap) -- no longer needed
 
     achieved_ctr = clicks / delivered if delivered > 0 else 0.0
+    days_used = hours_used / 24.0
     return {
         "scenario_id": scenario["id"],
         "delivered_impressions": delivered,

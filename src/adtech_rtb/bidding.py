@@ -85,9 +85,17 @@ def bootstrap_flight_contexts(
     exploration -- so campaigns longer than that are synthesized by
     resampling real rows with replacement, at the pool's own average daily
     rate, rather than being capped at 2 literal calendar days. Each
-    resampled row is tagged with a synthetic 0-indexed `sim_day` (its
-    original hour-of-day feature is left untouched) so callers can replay
-    the flight in chronological order.
+    resampled row is tagged with a synthetic 0-indexed `sim_day` AND
+    `sim_hour` (`sim_day*24 + the row's own real hour-of-day from its
+    original timestamp`) -- `sim_hour` is the finer clock callers should
+    actually sort/pace on. An earlier version only assigned `sim_day` and
+    sorted by that alone, which left rows *within* a day in whatever
+    arbitrary order the resample happened to produce -- not genuinely
+    hour-sequenced despite `hour` already being a real, carried-through
+    feature on every resampled row. `sim_hour` fixes both the ordering and
+    (via simulator.py) the pacing controller's time granularity, which was
+    day-level and confirmed too coarse for a bandit to act on for most of
+    a flight (see pacing.py's PACE_CONVEXITY note).
 
     CAVEAT, deliberately not fixed: the pool is only 2 real calendar days
     (2013-06-11 Tue, 06-12 Wed), so a bootstrapped multi-week flight
@@ -112,7 +120,8 @@ def bootstrap_flight_contexts(
 
     sampled = pool.iloc[row_positions].copy()
     sampled["sim_day"] = sim_days
-    return sampled.sort_values("sim_day", kind="stable").reset_index(drop=True)
+    sampled["sim_hour"] = sim_days * 24 + sampled["timestamp"].dt.hour.to_numpy()
+    return sampled.sort_values("sim_hour", kind="stable").reset_index(drop=True)
 
 
 def geo_volume_table(
