@@ -22,6 +22,11 @@ paths:
   interim_dir: "data/interim"
   processed_dir: "data/processed"
 
-# Campaign delivery scenarios simulated by the bandit (impressions target X, CTR floor Y).
-# Populated with real values once Phase 0 EDA confirms realistic per-campaign volumes/CTRs.
-scenarios: []
+# Campaign delivery scenarios (target geo, flight window, impressions
+# target X, CTR floor Y) shared by the naive baseline and the bandit, so
+# both are evaluated against exactly the same problems. Randomly generated
+# (fixed seed) by scripts/generate_scenarios.py and committed to
+# config/scenarios.yaml rather than here, so regenerating them doesn't
+# clobber this file's hand-written comments (yaml.safe_load/dump discards
+# comments on a round-trip -- learned the hard way).
+scenarios_file: "config/scenarios.yaml"
