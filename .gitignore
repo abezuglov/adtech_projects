@@ -1,9 +1,13 @@
-# Data (multi-GB; regenerate locally via scripts/download_data.py + scripts/make_dataset.py)
+# Data. The synthetic pipeline's own working data (data/interim/synthetic_world.json,
+# etc.) regenerates locally via scripts/generate_synthetic_world.py +
+# scripts/generate_synthetic_scenarios.py, so isn't committed either.
+# data/raw/ and data/processed/ predate this repo's synthetic-first-price
+# state (real iPinYou logs from the archive/real-data-gsp branch's
+# pipeline) -- still ignored so any of that multi-GB data left on disk
+# locally never gets swept into a commit by accident.
 data/raw/
 data/interim/
-data/processed/*.parquet
-*.zip
-*.7z
+data/processed/
 
 # Python
 __pycache__/

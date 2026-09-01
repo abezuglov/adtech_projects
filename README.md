@@ -1,50 +1,56 @@
 # RTB Campaign Delivery Optimizer
 
-**Status: in progress (Phase 0 — data pipeline).** This README will be rewritten to lead with real results (calibration plots, strategy comparison table, warm-start results, live demo link) once they exist. Right now it documents the plan.
+**Status: Phase 5 (synthetic first-price environment) built and validated.**
 
 ## Problem
 
-A campaign must serve **X impressions** in a target geo within a time window while keeping observed **click-through rate ≥ Y**, at **minimum total spend**. This is framed as a sequential, resource-constrained decision problem — a **constrained contextual bandit** (Bandits-with-Knapsacks style: Badanidiyuru, Kleinberg & Slivkins) — not a plain classification task, using real bid/impression/click logs from an actual demand-side platform (DSP).
+A campaign must serve **X impressions** within a time window while keeping observed **click-through rate ≥ Y**, at **minimum total spend**. Framed as a sequential, resource-constrained decision problem — a **constrained contextual bandit** (Bandits-with-Knapsacks style: Badanidiyuru, Kleinberg & Slivkins), not a plain classification task.
 
-## Why this project
+## Why a synthetic auction environment, not real historical data
 
-Built to demonstrate the same class of real-time-bidding analysis done professionally (in a confidential, unpublishable context) on public data instead: the [iPinYou RTB dataset](http://contest.ipinyou.com/) — real bidding, impression, click, and conversion logs released after iPinYou's 2013 Global RTB Bidding Algorithm Competition. See `DATA_LICENSE.md` for citation/license terms and `data/README.md` for the full schema and acquisition steps.
+This project originally ran entirely against the real [iPinYou RTB dataset](http://contest.ipinyou.com/) (2013 Global RTB Bidding Algorithm Competition logs) — a fitted market simulator (LightGBM win-rate/price/CTR models), a naive flat-bid baseline, the bandit, and a cross-campaign warm-start. That work is preserved in full on the **[`archive/real-data-gsp`](../../tree/archive/real-data-gsp) branch**.
+
+It surfaced a real finding, not a bug: iPinYou's auctions are GSP (second-price) — you pay the second-highest *competing* bid, never your own — so `paying_price` is mechanically independent of your own bid. Once bidding is worth it at all, bidding the maximum allowed level is provably optimal (higher bid never costs more, only wins more). There is no genuine bid-*level* decision under GSP, only bid/skip — confirmed empirically (bids concentrated ~99.9% at the top level on the largest real scenario), and it capped the bandit's edge over a naive flat bid at roughly 2%.
+
+This repo now runs against a **synthetic, hierarchical, first-price environment** instead, purpose-built so bid level is a genuine cost/quality trade-off ("bid shading" — a real, well-known adtech problem since most exchanges moved to first-price around 2019). Result: the bandit beats the naive baseline on **12/12** generated scenarios, by **5.1–15.1% CPM** (avg **11.2%**), an **11.9%** total spend reduction at matched delivery.
 
 ## Approach
 
-1. **Market simulator**: a click-propensity model (LightGBM) and a win-rate/market-price model fit from historical bids — validated against real logged win/loss outcomes (every bid's outcome is derivable by joining Bid ID between the bidding log and the impression log).
-2. **Naive baseline**: constant-bid / flat pacing.
-3. **Constrained contextual bandit**: minimizes spend subject to a delivery target and a CTR floor (gated on a lower-confidence-bound estimate, given iPinYou's ~0.07-0.1% base CTR).
-4. **Warm start**: a prior built from other campaigns' historical price/CTR distributions, applied to a held-out "new" campaign to reduce exploration cost.
-5. **Demo**: a Streamlit app comparing the three strategies interactively.
+1. **World generator** (`synthetic_world.py`): a hierarchical PyMC model's *prior* (no inference — pure forward sampling) draws one frozen realization of 10,000 placements' economics (clearing price, price-sensitivity, baseline CTR, right-skewed traffic volume) plus the population-level rule governing how campaigns' CTR affinity varies. Campaigns are not a fixed roster — any campaign id is valid, sampled on the fly, with its own affinity vector generated lazily and deterministically.
+2. **Environment** (`synthetic.py`): first-price auctions (pay exactly your bid on a win) resolved against the frozen world.
+3. **Naive baseline**: closed-form population expectation for the best constant bid.
+4. **Constrained contextual bandit** (`bandit.py`/`pacing.py`): hand-rolled online Bayesian linear/logistic models (win-rate, CTR) updated batch-by-batch, Thompson sampling over discretized bid levels, Lagrangian dual-variable pacing against the delivery target and CTR floor. The same `BanditPolicy` class also drives the archived real-data (GSP) pipeline — schema and auction-mechanism (`first_price` flag) are both passed in by the caller, not hardcoded.
 
-The auction mechanism is confirmed second-price (Vickrey/GSP) directly from iPinYou's own dataset paper — and iPinYou's own official offline-evaluation methodology for the original competition is, in fact, the same bid-replay logic used here for simulation (see `data/README.md`).
-
-An **offline-RL (CQL/IQL) version is a planned v2**, not attempted in v1 — deferred deliberately to avoid an unfinished flagship feature blocking release of a working v1. See the project plan for details.
+Not yet built: a synthetic warm-start comparison (transferring the win-rate prior across campaigns should help; transferring CTR shouldn't, since each campaign's affinity is an independent draw — see `synthetic_world.py`'s docstring), and a demo UI.
 
 ## Repo structure
 
 ```
-config/            campaign & scenario configuration
-data/              raw (gitignored) / interim (gitignored) / processed (small, committed)
-scripts/           data download & preprocessing
-src/adtech_rtb/    core library (simulator, bandit, evaluation)
-notebooks/         exploration & results notebooks
-app/               Streamlit demo
-tests/             pytest suite
-reports/figures/   result figures referenced by this README
+config/synthetic_scenarios.yaml    generated delivery scenarios
+scripts/                            generate_synthetic_world.py -> generate_synthetic_scenarios.py
+                                     -> run_synthetic_naive_baseline.py -> run_synthetic_bandit.py
+src/adtech_rtb/
+  synthetic_world.py                 PyMC hierarchical world generator
+  synthetic.py                       first-price environment + naive-baseline solver + scenario generator
+  bandit.py                          online Bayesian bandit policy (shared with the archived real-data pipeline)
+  pacing.py                          Lagrangian dual-variable pacing controller (shared)
+reports/synthetic_*.json            latest run results
+app/                                Streamlit demo (not yet built)
 ```
 
 ## Reproduce it
 
 ```
 pip install -r requirements.txt
-python scripts/download_data.py   # see data/README.md if this needs manual steps
-python scripts/make_dataset.py
+python scripts/generate_synthetic_world.py
+python scripts/generate_synthetic_scenarios.py
+python scripts/run_synthetic_naive_baseline.py
+python scripts/run_synthetic_bandit.py
 ```
 
-## Limitations (will expand as the project develops)
+## Limitations
 
-- The bidding log reflects this DSP's own observed bid volume, not the full unconstrained exchange auction population.
-- The market simulator is a model fit from a 2013 historical market — not live, not current, and doesn't capture live competitor adaptation.
-- The CTR-floor constraint's estimation noise (given the dataset's very low base CTR) is handled via a lower-confidence-bound gate, not a point estimate — documented in the methodology section once written.
+- Single-seed realization per scenario, not averaged over multiple seeds — a documented simplification, not a rigor claim.
+- The bandit's dual-variable cap (how much it's willing to pay above intrinsic value to protect delivery) is a deliberate, empirically-tuned trade-off: it's calibrated to preserve real price sensitivity, which means a handful of delivery-tight scenarios need a generous overrun allowance (up to ~3.3x nominal flight length) to fully complete rather than bidding indiscriminately to finish on time.
+- Warm-start and a live demo are planned, not yet built (see Approach above).
+- The real iPinYou/GSP exploration this project started from — including the root-caused finding about GSP's bid-independent pricing — is preserved on the `archive/real-data-gsp` branch, not deleted, and is itself a legitimate result worth reading.
