@@ -20,7 +20,8 @@ import numpy as np
 import pandas as pd
 
 from .bandit import BanditPolicy
-from .market_model import prepare_all_bids
+from .features import ALL_CATEGORICAL_COLUMNS, NUMERIC_COLUMNS
+from .market_model import MARKET_CATEGORICAL_COLUMNS, prepare_all_bids
 
 # Cap on rows used to fit the prior -- the other 4 campaigns' full train
 # split is ~41M rows; N_HASH_BUCKETS=16384 means even 500K rows gives a
@@ -47,7 +48,13 @@ def fit_prior(train_df: pd.DataFrame, exclude_advertiser_id: int, seed: int = 0)
         other_df = other_df.iloc[idx]
 
     contexts = prepare_all_bids(other_df)
-    policy = BanditPolicy(ctr_floor=0.0, seed=seed)
+    policy = BanditPolicy(
+        ctr_floor=0.0,
+        market_categorical_columns=MARKET_CATEGORICAL_COLUMNS,
+        ctr_categorical_columns=ALL_CATEGORICAL_COLUMNS,
+        numeric_columns=NUMERIC_COLUMNS,
+        seed=seed,
+    )
 
     n = len(contexts)
     for start in range(0, n, CHUNK_SIZE):
@@ -67,7 +74,13 @@ def apply_prior(prior_policy: BanditPolicy, ctr_floor: float, seed: int) -> Band
     to restore state into a policy object, just from a fitted prior
     instead of a mid-flight snapshot.
     """
-    policy = BanditPolicy(ctr_floor=ctr_floor, seed=seed)
+    policy = BanditPolicy(
+        ctr_floor=ctr_floor,
+        market_categorical_columns=MARKET_CATEGORICAL_COLUMNS,
+        ctr_categorical_columns=ALL_CATEGORICAL_COLUMNS,
+        numeric_columns=NUMERIC_COLUMNS,
+        seed=seed,
+    )
     policy.win_rate_model.mu = prior_policy.win_rate_model.mu.copy()
     policy.win_rate_model.q = prior_policy.win_rate_model.q.copy()
     policy.ctr_model.mu = prior_policy.ctr_model.mu.copy()

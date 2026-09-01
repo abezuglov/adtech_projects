@@ -30,16 +30,22 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from . import bidding
-from .features import ALL_CATEGORICAL_COLUMNS, NUMERIC_COLUMNS
-from .market_model import MARKET_CATEGORICAL_COLUMNS
-
 N_HASH_BUCKETS = 2**14
 BIAS_INDEX = 0
 BID_PRICE_INDEX = 1
 _RESERVED = 2  # indices [0, _RESERVED) are bias/bid-price, hashed features live in [_RESERVED, N_HASH_BUCKETS)
 
-BID_LEVELS = np.linspace(bidding.DEFAULT_BID_BOUNDS[0], bidding.DEFAULT_BID_BOUNDS[1], 6)
+# Canonical home for the bid-price search range -- originally lived in
+# bidding.py (real-data-only), moved here so bandit.py has no import-time
+# dependency on real-data modules (bidding.py unconditionally imports
+# ctr_model/market_model). bidding.py and synthetic.py both import it from
+# here now. 200-320 RMB/CPM is the historically observed real-data range
+# (see the archived real-data pipeline's bidding.py docstring); synthetic.py
+# reuses the same numeric range as an arbitrary-but-fixed synthetic
+# currency scale, not because it's tied to real data.
+DEFAULT_BID_BOUNDS = (200.0, 320.0)
+
+BID_LEVELS = np.linspace(DEFAULT_BID_BOUNDS[0], DEFAULT_BID_BOUNDS[1], 6)
 _BID_NORM = 300.0  # rough centering scale for the bidding_price feature, same order of magnitude as the price itself
 
 # Ad hoc normalization scales so numeric features sit on comparable orders
@@ -229,38 +235,36 @@ class BanditPolicy:
     owned and updated by simulator.py, passed in read-only where needed.
 
     `market_categorical_columns`/`ctr_categorical_columns`/`numeric_columns`
-    default to the real iPinYou schema (features.py's column lists) so
-    existing real-data callers (run_bandit.py, run_warm_start.py) need no
-    changes -- but are overridable so the same class also works over the
-    Phase 5 synthetic environment's much smaller schema (synthetic.py),
-    without duplicating this whole class just to swap a handful of column
-    names. `hash_features` was already schema-agnostic at the function
-    level; only this class's own wrappers used to hardcode the real lists.
+    are required, not defaulted to any particular schema: this class has no
+    built-in notion of "the real iPinYou columns" or "the synthetic columns"
+    -- callers own their schema entirely and pass it explicitly (the real
+    pipeline's run_bandit.py/run_warm_start.py pass features.py's lists;
+    Phase 5's synthetic.py passes its own much smaller schema). `hash_features`
+    was already schema-agnostic at the function level; this just keeps
+    `BanditPolicy` itself schema-agnostic too, rather than silently coupling
+    it to whichever schema happened to be the first one built.
     """
 
     def __init__(
         self,
         ctr_floor: float,
+        market_categorical_columns: list[str],
+        ctr_categorical_columns: list[str],
+        numeric_columns: list[str],
         seed: int = 0,
         first_price: bool = False,
-        market_categorical_columns: list[str] | None = None,
-        ctr_categorical_columns: list[str] | None = None,
-        numeric_columns: list[str] | None = None,
     ):
         self.rng = np.random.default_rng(seed)
         # First-price mode (Phase 5 synthetic environment): you pay exactly
         # what you bid on a win, so cost genuinely scales with bid level --
-        # unlike GSP (this project's real-data mode), where paying_price is
-        # mechanically independent of your own bid. See choose_bids/observe
-        # below for how this flag changes the decision and update logic.
+        # unlike GSP (the real-data mode preserved on the archive/real-data-gsp
+        # branch), where paying_price is mechanically independent of your own
+        # bid. See choose_bids/observe below for how this flag changes the
+        # decision and update logic.
         self.first_price = first_price
-        self._market_categorical_columns = (
-            market_categorical_columns if market_categorical_columns is not None else MARKET_CATEGORICAL_COLUMNS
-        )
-        self._ctr_categorical_columns = (
-            ctr_categorical_columns if ctr_categorical_columns is not None else ALL_CATEGORICAL_COLUMNS
-        )
-        self._numeric_columns = numeric_columns if numeric_columns is not None else NUMERIC_COLUMNS
+        self._market_categorical_columns = market_categorical_columns
+        self._ctr_categorical_columns = ctr_categorical_columns
+        self._numeric_columns = numeric_columns
         self.win_rate_model = OnlineBayesianLinearModel(N_HASH_BUCKETS, link="logistic")
         self.ctr_model = OnlineBayesianLinearModel(N_HASH_BUCKETS, link="logistic")
         # Stronger regularization/damping than the shared defaults: the

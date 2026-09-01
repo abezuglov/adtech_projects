@@ -35,13 +35,16 @@ import numpy as np
 import pandas as pd
 
 from . import ctr_model, market_model
+from .bandit import DEFAULT_BID_BOUNDS
 
-# market_model.py's own bid-price sanity check only queried 200-320
-# RMB/CPM, the historically observed range for this dataset's ~227-300
-# fixed-price bidding strategies. Default search bounds stay inside that
-# support; solving outside it is extrapolation with no ground truth
-# behind it (see market_model.py's module docstring).
-DEFAULT_BID_BOUNDS = (200.0, 320.0)
+# DEFAULT_BID_BOUNDS's canonical home is bandit.py (shared by BID_LEVELS and
+# Phase 5's synthetic.py) -- re-imported here under the same name since
+# every function below already refers to it, and this project's own
+# rationale still applies: market_model.py's bid-price sanity check only
+# queried 200-320 RMB/CPM, the historically observed range for this
+# dataset's ~227-300 fixed-price bidding strategies. Default search bounds
+# stay inside that support; solving outside it is extrapolation with no
+# ground truth behind it (see market_model.py's module docstring).
 
 
 def select_eligible_auctions(

@@ -48,7 +48,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from adtech_rtb.bandit import BanditPolicy  # noqa: E402
-from adtech_rtb.market_model import RAW_COLUMNS  # noqa: E402
+from adtech_rtb.features import ALL_CATEGORICAL_COLUMNS, NUMERIC_COLUMNS  # noqa: E402
+from adtech_rtb.market_model import MARKET_CATEGORICAL_COLUMNS, RAW_COLUMNS  # noqa: E402
 from adtech_rtb.simulator import simulate_flight  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -105,7 +106,13 @@ def main() -> None:
             if s["id"] in checkpointed:
                 continue
 
-            policy = BanditPolicy(ctr_floor=s["ctr_floor"], seed=POLICY_SEED)
+            policy = BanditPolicy(
+                ctr_floor=s["ctr_floor"],
+                market_categorical_columns=MARKET_CATEGORICAL_COLUMNS,
+                ctr_categorical_columns=ALL_CATEGORICAL_COLUMNS,
+                numeric_columns=NUMERIC_COLUMNS,
+                seed=POLICY_SEED,
+            )
             t0 = time.time()
             result = simulate_flight(
                 s,

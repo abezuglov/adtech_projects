@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from . import pacing
-from .bidding import DEFAULT_BID_BOUNDS
+from .bandit import DEFAULT_BID_BOUNDS
 from .synthetic_world import World, campaign_affinity_vector, diurnal_ctr_shift, diurnal_price_shift
 
 MARKET_CATEGORICAL_COLUMNS = ["placement"]
@@ -70,7 +70,7 @@ MC_POOL_SIZE = 200_000  # Monte-Carlo sample size for closed-form expectations (
 # real GSP data, where cost is level-independent and the cap's magnitude
 # barely matters (see pacing.update_delivery_lambda's docstring). Under
 # first-price, cost genuinely spans bandit.BID_LEVELS' full
-# bidding.DEFAULT_BID_BOUNDS range, (320-200)/1000 = 0.12 RMB/impression --
+# bandit.DEFAULT_BID_BOUNDS range, (320-200)/1000 = 0.12 RMB/impression --
 # confirmed empirically that reusing 1.5 here swamps that span almost
 # immediately once behind pace, collapsing bid-level choice back to
 # "always maximize win probability" regardless of price (the bandit came
