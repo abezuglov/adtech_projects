@@ -83,7 +83,38 @@ MIN_DELIVERED_FOR_CTR_JUDGMENT = 30
 # policy stays selective (skip pricier auctions, wait for cheaper ones)
 # for most of the flight, only escalating sharply as elapsed_fraction
 # approaches 1 and the deadline is genuinely close.
-PACE_CONVEXITY = 3.0
+#
+# LOWERED 3.0 -> 1.5 (2026-09-01): 3.0 was too backloaded for the synthetic
+# first-price pipeline's near-ceiling scenarios (generate_scenario_grid.py's
+# "challenging" cells, win_rate_fraction=0.85) -- expected_cumulative stays
+# under 12.5% of target through elapsed_fraction=0.5, so pacing_error (and
+# therefore lambda_delivery) barely moves for most of the flight, and by the
+# time real urgency kicks in near the deadline there's no runway left to
+# close a large deficit: confirmed via trajectory instrumentation that
+# lambda_delivery saturated at its cap by elapsed_fraction=0.18 and sat
+# flat for the rest of a flight that still ran to 4.38x nominal length.
+# Sweeping convexity x SYNTHETIC_LAMBDA_DELIVERY_MAX/SYNTHETIC_LAMBDA_CTR_MAX
+# together (not swapped for it -- see synthetic.py) on paired easy/challenging
+# proxy scenarios found 1.5 dominates 3.0 at every cap tested: lower overrun,
+# equal-or-better CPM, equal-or-lower delivery_cv. Still meaningfully convex
+# (not linear/1.0, which reproduces the price-swamping problem above) --
+# just less extreme, since 3.0's degree of backloading was calibrated
+# without ever testing a near-ceiling target.
+#
+# CHANGED 1.5 -> 1.0 (2026-09-01, isolated step 1 of 2, see plan
+# precious-napping-scott): explicit design decision that a *backloaded*
+# delivery curve is the wrong target regardless of how well-tuned -- a real
+# campaign owner wants steady, predictable delivery through the flight, not
+# "mostly quiet, then a sharp catch-up sprint near the deadline" (which is
+# what any convexity > 1 produces by construction, however gently). Reverting
+# to linear pacing is EXPECTED to reopen the exact swamping failure this
+# constant was raised to fix (see the "confirmed on 3427-3" note above) --
+# eta below is the other half of this fix and must move with it; this
+# constant is not expected to be stable on its own with eta unchanged. Left
+# as its own isolated commit/test step (not landed together with the eta
+# retune) specifically so each change's effect on delivery_cv/overrun/CPM is
+# separately attributable, not so this value is meant to ship alone.
+PACE_CONVEXITY = 1.0
 
 
 def update_delivery_lambda(
@@ -91,7 +122,7 @@ def update_delivery_lambda(
     delivered: int,
     target_impressions: int,
     elapsed_fraction: float,
-    eta: float = 0.5,
+    eta: float = 0.1,
     lambda_max: float = LAMBDA_DELIVERY_MAX,
 ) -> float:
     """`elapsed_fraction` is time-elapsed / nominal flight length (can
@@ -104,7 +135,31 @@ def update_delivery_lambda(
     a flight (e.g. 0.2 elapsed_fraction -> 0.008 expected-pace fraction,
     not 0.2) -- without a compensating gain, the *catch-up* phase near the
     deadline would ramp too slowly to actually recover a real shortfall
-    within the remaining batches.
+    within the remaining batches. That reasoning applied to PACE_CONVEXITY=
+    3.0/1.5; it doesn't carry over to PACE_CONVEXITY=1.0 (see pacing_error's
+    own docstring context there), where pacing_error is much larger from the
+    start of the flight, not smaller.
+
+    LOWERED 0.5 -> 0.1 (2026-09-01, isolated step 2 of 2, plan
+    precious-napping-scott, tested with PACE_CONVEXITY=1.0 from step 1):
+    trajectory instrumentation on the synthetic grid showed eta=0.5 driving
+    lambda_delivery from 0 to 0.72-1.5 within 40-150 batches -- 2-8% of a
+    ~1800-batch flight -- blowing straight through the ~0.12-0.3 RMB window
+    where it's actually comparable to the price span between bid levels
+    (LAMBDA_DELIVERY_MAX's own docstring) instead of swamping it. In the
+    delivery-tight ("challenging") cells that meant lambda_delivery pinned
+    at LAMBDA_MAX for ~92% of the flight; in the slack ("easy") cells it
+    overshot past the window, then oscillated back down toward zero and
+    up again as delivery alternately outran and fell behind the target --
+    neither leaves the policy dwelling in the price-sensitive window long
+    enough to matter. 0.1 is a first empirically-tested cut, not a swept
+    optimum: roughly a 5x slowdown, chosen to make lambda_delivery's climb
+    to that window take a meaningfully larger fraction of the flight
+    (rather than the first few percent) without under-reacting to a real
+    late-flight shortfall -- see the grid results this change was validated
+    against for the actual resulting delivery_cv/overrun/CPM-vs-naive
+    numbers, since (as this docstring's own history shows) a plausible-
+    sounding gain doesn't reliably survive contact with a real trajectory.
 
     `lambda_max` defaults to LAMBDA_DELIVERY_MAX (this module's real-data
     calibration) but is overridable: the right cap isn't a universal

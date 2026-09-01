@@ -52,6 +52,11 @@ FLIGHT_LENGTH_DAYS_RANGE = (14, 28)
 # meaningfully demanding (real delivery pressure, real pacing behavior to
 # observe) without requiring near-majority population win rates on a curve
 # this wide.
+#
+# That 0.5-cap ceiling no longer applies (see SYNTHETIC_LAMBDA_DELIVERY_MAX's
+# 2026-09-01 note below) -- not revisited since the new 1.5 cap clears this
+# whole range comfortably (proxy sweep: win_rate_fraction=0.15 finishes at
+# 0.99x nominal length; 0.85, well above this range's ceiling, at 1.24x).
 TARGET_WIN_RATE_FRACTION = (0.1, 0.5)
 CTR_FLOOR_FRACTION = (0.5, 0.9)
 
@@ -75,7 +80,38 @@ MC_POOL_SIZE = 200_000  # Monte-Carlo sample size for closed-form expectations (
 # immediately once behind pace, collapsing bid-level choice back to
 # "always maximize win probability" regardless of price (the bandit came
 # out *worse* than the naive baseline, 295 vs 253 CPM, on the first
-# validation scenario tried).
+# validation scenario tried). THAT finding, and the 0.5 chosen from it, both
+# predate pacing.PACE_CONVEXITY's 2026-09-01 change from 3.0 to 1.5 -- see
+# below, since the swamping threshold turned out to depend on both together,
+# not on this cap alone.
+#
+# RAISED 0.5 -> 1.5 (2026-09-01): 0.5's own empirical sweep (0.2-1.5, notes
+# below) never actually escaped the problem it was chosen to solve -- it just
+# capped its severity. Trajectory instrumentation on generate_scenario_grid.py's
+# "challenging" cells (win_rate_fraction=0.85, near the achievable ceiling)
+# showed lambda_delivery saturating at 0.5 within the first ~18% of the
+# flight and then sitting flat, unable to escalate further no matter how far
+# behind pace delivery fell -- a structurally unrecoverable deficit, not a
+# calibration nuance (confirmed via a 4.38x nominal-length overrun even
+# though PACE_CONVEXITY's OLD backloaded curve, see pacing.py, meant urgency
+# should have had room to still rise late in the flight). The cap itself,
+# not the curve shape, was the actual bottleneck. Once PACE_CONVEXITY dropped
+# to 1.5 (escalating lambda_delivery earlier and more gradually, rather than
+# holding it near-zero until a late, steep catch-up), the swamping threshold
+# this constant was originally calibrated against moved: a paired
+# easy/challenging proxy sweep of this constant (0.5/0.8/1.1/1.5/2.0/2.5/3.0/
+# 4.0) crossed with PACE_CONVEXITY (1.5/3.0) found overrun improving
+# monotonically with the cap at PACE_CONVEXITY=1.5 -- 3.49x/1.21x
+# (challenging/easy) at 0.5, down to 1.24x/0.99x at 1.5, with CPM still
+# within a few percent of the naive baseline on the hard cell and beating it
+# by ~17% on the easy one -- then only marginal further overrun improvement
+# (1.24x -> 1.17x from 1.5 -> 4.0) at a steadily worsening CPM cost, so 1.5
+# is the point past which the cap stops being what's limiting delivery.
+# Landing on 1.5 exactly (matching pacing.py's real-data constants) is
+# coincidental, not a simplification to rely on -- keep this a separate,
+# environment-calibrated constant rather than importing pacing.LAMBDA_
+# DELIVERY_MAX/LAMBDA_CTR_MAX directly, since a future change to either
+# environment's calibration shouldn't silently drag the other along.
 #
 # 0.5 was chosen from an empirical sweep (0.2-1.5) on a small scenario
 # against three criteria: (1) can it actually hit the delivery target
@@ -89,9 +125,12 @@ MC_POOL_SIZE = 200_000  # Monte-Carlo sample size for closed-form expectations (
 # delivery_cv below (a low CV, ~0.4, with only the expected initial
 # cold-start dead zone, not scattered gaps later) even though 0.5
 # overruns the nominal flight length by ~2x on a delivery-tight scenario:
-# it runs a bit long at a steady pace, not lumpily.
-SYNTHETIC_LAMBDA_DELIVERY_MAX = 0.5
-SYNTHETIC_LAMBDA_CTR_MAX = 0.5
+# it runs a bit long at a steady pace, not lumpily. That sweep was run
+# under the OLD PACE_CONVEXITY=3.0 and never tested a near-ceiling target
+# (win_rate_fraction up to TARGET_WIN_RATE_FRACTION's 0.5, not 0.85) --
+# see the 2026-09-01 note above for why it undersold the achievable cap.
+SYNTHETIC_LAMBDA_DELIVERY_MAX = 1.5
+SYNTHETIC_LAMBDA_CTR_MAX = 1.5
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -227,8 +266,12 @@ def simulate_synthetic_flight(
         contexts = environment.sample_context(campaign_id, rng, batch_size, hour_of_day)
 
         chosen_bids = policy.choose_bids(contexts)
+        batch_level_counts: dict[float, int] = {}
         for level, count in zip(*np.unique(chosen_bids[chosen_bids > 0], return_counts=True)):
-            bid_level_counts[float(level)] = bid_level_counts.get(float(level), 0) + int(count)
+            level = float(level)
+            count = int(count)
+            bid_level_counts[level] = bid_level_counts.get(level, 0) + count
+            batch_level_counts[level] = count
 
         won, price_paid, clicked = environment.resolve(contexts, chosen_bids, rng)
 
@@ -259,8 +302,12 @@ def simulate_synthetic_flight(
                     "days_used": hours_used / 24.0,
                     "cumulative_delivered": delivered,
                     "cumulative_spend": spend,
+                    "cumulative_clicks": clicks,
+                    "running_ctr": running_ctr,
+                    "batch_size": len(contexts),
                     "batch_won": batch_won,
                     "batch_cpm": (batch_spend / batch_won * 1000.0) if batch_won > 0 else None,
+                    "batch_bid_level_counts": batch_level_counts,
                     "lambda_delivery": policy.lambda_delivery,
                     "lambda_ctr": policy.lambda_ctr,
                 }
@@ -387,6 +434,23 @@ def solve_delivery_bid_synthetic(
     }
 
 
+def population_rate_bounds(
+    world: World, campaign_id, rng: np.random.Generator, mc_pool_size: int = MC_POOL_SIZE
+) -> tuple[float, float, float]:
+    """(rate_floor, rate_ceiling, mean_ctr): the achievable population-level
+    win-rate band at DEFAULT_BID_BOUNDS' two ends, plus mean CTR, for
+    `campaign_id` -- shared by generate_synthetic_scenarios and any other
+    scenario generator that needs to place a delivery/CTR target relative to
+    what this world can actually produce."""
+    pool = _mc_pool(world, campaign_id, rng, mc_pool_size)
+    placement = pool["placement"].to_numpy()
+    hour = pool["hour"].to_numpy()
+    rate_floor = float(true_win_prob(world, placement, hour, DEFAULT_BID_BOUNDS[0]).mean())
+    rate_ceiling = float(true_win_prob(world, placement, hour, DEFAULT_BID_BOUNDS[1]).mean())
+    mean_ctr = float(true_ctr(world, campaign_id, placement, hour).mean())
+    return rate_floor, rate_ceiling, mean_ctr
+
+
 def generate_synthetic_scenarios(
     world: World,
     campaign_ids: list,
@@ -408,16 +472,11 @@ def generate_synthetic_scenarios(
             flight_length_days = int(rng.integers(FLIGHT_LENGTH_DAYS_RANGE[0], FLIGHT_LENGTH_DAYS_RANGE[1] + 1))
             n_eligible_auctions = AUCTIONS_PER_HOUR * 24 * flight_length_days
 
-            pool = _mc_pool(world, campaign_id, rng, mc_pool_size)
-            placement = pool["placement"].to_numpy()
-            hour = pool["hour"].to_numpy()
-            rate_floor = float(true_win_prob(world, placement, hour, DEFAULT_BID_BOUNDS[0]).mean())
-            rate_ceiling = float(true_win_prob(world, placement, hour, DEFAULT_BID_BOUNDS[1]).mean())
+            rate_floor, rate_ceiling, mean_ctr = population_rate_bounds(world, campaign_id, rng, mc_pool_size)
 
             target_rate = rate_floor + rng.uniform(*TARGET_WIN_RATE_FRACTION) * (rate_ceiling - rate_floor)
             target_impressions = max(1, round(target_rate * n_eligible_auctions))
 
-            mean_ctr = float(true_ctr(world, campaign_id, placement, hour).mean())
             ctr_floor = rng.uniform(*CTR_FLOOR_FRACTION) * mean_ctr
 
             outcome_seed = int(rng.integers(0, 2**31 - 1))
