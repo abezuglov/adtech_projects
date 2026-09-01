@@ -92,6 +92,7 @@ def update_delivery_lambda(
     target_impressions: int,
     elapsed_fraction: float,
     eta: float = 0.5,
+    lambda_max: float = LAMBDA_DELIVERY_MAX,
 ) -> float:
     """`elapsed_fraction` is time-elapsed / nominal flight length (can
     exceed 1.0 once a flight overruns its nominal length -- see
@@ -104,13 +105,28 @@ def update_delivery_lambda(
     not 0.2) -- without a compensating gain, the *catch-up* phase near the
     deadline would ramp too slowly to actually recover a real shortfall
     within the remaining batches.
+
+    `lambda_max` defaults to LAMBDA_DELIVERY_MAX (this module's real-data
+    calibration) but is overridable: the right cap isn't a universal
+    constant, it's calibrated against how much the *cost* term can vary
+    across bid levels in whatever environment is calling this. Under real
+    GSP data that variation is moot (cost is level-independent -- see
+    bandit.py's choose_bids), so 1.5 vs. a ~0.12 price span never actually
+    mattered there. Under Phase 5's synthetic first-price environment, cost
+    genuinely scales with level across that same ~0.12 span (200-320
+    RMB/CPM), and 1.5 was confirmed (empirically, on a real synthetic run)
+    to swamp it just as badly as the original LAMBDA_MAX=50 swamped real
+    data -- once lambda_delivery nears 1.5, a 0.12 max cost differential
+    barely dents the argmax, collapsing bid-level choice back to "always
+    maximize win probability" regardless of price. synthetic.py passes a
+    smaller, environment-calibrated cap for this reason.
     """
     if elapsed_fraction <= 1.0:
         expected_cumulative = target_impressions * (elapsed_fraction**PACE_CONVEXITY)
     else:
         expected_cumulative = target_impressions
     pacing_error = (expected_cumulative - delivered) / max(target_impressions, 1)
-    return float(min(max(lambda_delivery + eta * pacing_error, 0.0), LAMBDA_DELIVERY_MAX))
+    return float(min(max(lambda_delivery + eta * pacing_error, 0.0), lambda_max))
 
 
 def update_ctr_lambda(
@@ -119,6 +135,7 @@ def update_ctr_lambda(
     ctr_floor: float,
     delivered: int,
     eta: float = 0.15,
+    lambda_max: float = LAMBDA_CTR_MAX,
 ) -> float:
     """The error term is RELATIVE, `(ctr_floor - running_ctr) / ctr_floor`
     (dimensionless, O(1): +1.0 if running CTR is zero, -0.5 if it's 1.5x
@@ -146,4 +163,4 @@ def update_ctr_lambda(
     if delivered < MIN_DELIVERED_FOR_CTR_JUDGMENT:
         return lambda_ctr
     ctr_error = (ctr_floor - running_ctr) / ctr_floor
-    return float(min(max(lambda_ctr + eta * ctr_error, 0.0), LAMBDA_CTR_MAX))
+    return float(min(max(lambda_ctr + eta * ctr_error, 0.0), lambda_max))

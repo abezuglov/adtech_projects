@@ -227,10 +227,40 @@ class BanditPolicy:
     """Cold-start policy: three OnlineBayesianLinearModel learners plus the
     pacing dual variables from pacing.py. State (delivered/spend/clicks) is
     owned and updated by simulator.py, passed in read-only where needed.
+
+    `market_categorical_columns`/`ctr_categorical_columns`/`numeric_columns`
+    default to the real iPinYou schema (features.py's column lists) so
+    existing real-data callers (run_bandit.py, run_warm_start.py) need no
+    changes -- but are overridable so the same class also works over the
+    Phase 5 synthetic environment's much smaller schema (synthetic.py),
+    without duplicating this whole class just to swap a handful of column
+    names. `hash_features` was already schema-agnostic at the function
+    level; only this class's own wrappers used to hardcode the real lists.
     """
 
-    def __init__(self, ctr_floor: float, seed: int = 0):
+    def __init__(
+        self,
+        ctr_floor: float,
+        seed: int = 0,
+        first_price: bool = False,
+        market_categorical_columns: list[str] | None = None,
+        ctr_categorical_columns: list[str] | None = None,
+        numeric_columns: list[str] | None = None,
+    ):
         self.rng = np.random.default_rng(seed)
+        # First-price mode (Phase 5 synthetic environment): you pay exactly
+        # what you bid on a win, so cost genuinely scales with bid level --
+        # unlike GSP (this project's real-data mode), where paying_price is
+        # mechanically independent of your own bid. See choose_bids/observe
+        # below for how this flag changes the decision and update logic.
+        self.first_price = first_price
+        self._market_categorical_columns = (
+            market_categorical_columns if market_categorical_columns is not None else MARKET_CATEGORICAL_COLUMNS
+        )
+        self._ctr_categorical_columns = (
+            ctr_categorical_columns if ctr_categorical_columns is not None else ALL_CATEGORICAL_COLUMNS
+        )
+        self._numeric_columns = numeric_columns if numeric_columns is not None else NUMERIC_COLUMNS
         self.win_rate_model = OnlineBayesianLinearModel(N_HASH_BUCKETS, link="logistic")
         self.ctr_model = OnlineBayesianLinearModel(N_HASH_BUCKETS, link="logistic")
         # Stronger regularization/damping than the shared defaults: the
@@ -263,28 +293,41 @@ class BanditPolicy:
         self.lambda_ctr = 0.0
 
     def _market_features(self, contexts: pd.DataFrame, bid_prices: np.ndarray | None = None) -> sp.csr_matrix:
-        return hash_features(contexts, MARKET_CATEGORICAL_COLUMNS, NUMERIC_COLUMNS, bid_prices=bid_prices)
+        return hash_features(contexts, self._market_categorical_columns, self._numeric_columns, bid_prices=bid_prices)
 
     def _ctr_features(self, contexts: pd.DataFrame) -> sp.csr_matrix:
-        return hash_features(contexts, ALL_CATEGORICAL_COLUMNS, NUMERIC_COLUMNS)
+        return hash_features(contexts, self._ctr_categorical_columns, self._numeric_columns)
 
     def choose_bids(self, contexts: pd.DataFrame) -> np.ndarray:
-        """One discretized bid level (or 0.0 = skip) per row in `contexts`.
+        """One discretized bid level (or 0.0 = skip) per row in `contexts`,
+        chosen as the argmax over levels (skip = 0.0 an explicit competing
+        option) of the level's expected net value:
 
-        Price and CTR are bid-independent (mirrors market_model.py's own
-        models -- neither takes bidding_price as a feature), so "is this
-        impression worth winning at all" doesn't depend on bid level
-        either: it's a single net-value-per-win figure,
-        `lambda_delivery + lambda_ctr*(ctr - floor) - price/1000`, all
-        three terms denominated in RMB per impression (see pacing.py's
-        LAMBDA_DELIVERY_MAX/LAMBDA_CTR_MAX calibration notes -- an earlier
+            adjusted_value(level) = P(win|level) * (lambda_delivery +
+                lambda_ctr*(ctr - floor) - cost(level)/1000)
+
+        `cost(level)` is `price_sample` (this class's own learned price
+        model, level-*independent*) in GSP mode (`first_price=False`, this
+        project's real-data mode -- mirrors market_model.py's own models,
+        neither of which takes bidding_price as a feature, since under GSP
+        what you pay if you win doesn't depend on your own bid at all), or
+        `level` itself in first-price mode (Phase 5's synthetic
+        environment -- you pay exactly what you bid on a win, so cost
+        genuinely scales with level; no price model needed for the
+        decision since cost is then deterministic given your own action).
+
+        In GSP mode this reduces exactly to the simpler skip/bid-then-
+        maximize-win-probability rule an earlier version of this method
+        used directly: cost(level) doesn't vary with level there, so
+        `argmax_level P(win|level) * net_value_per_win` (net_value_per_win
+        a level-independent constant) is the same level as
+        `argmax_level P(win|level)` whenever that constant is positive, and
+        correctly falls back to skip (0) whenever it's <=0 -- so this is a
+        strict generalization, not a behavior change, for real-data mode.
+        (All terms denominated in RMB per impression -- see pacing.py's
+        LAMBDA_DELIVERY_MAX/LAMBDA_CTR_MAX calibration notes; an earlier
         version mixed scales here and delivery urgency silently swamped
-        price/CTR on every auction past the first batch). Only once that's
-        positive does bid *level* matter, and only for maximizing win
-        probability -- so a low-CTR, high-price placement can fail the
-        worth-it test and get skipped outright, while a level is chosen
-        (via Thompson-sampled win-rate posteriors, preserving exploration
-        across levels) only among placements already judged worth winning.
+        price/CTR on every auction past the first batch.)
         """
         n = len(contexts)
         # Zero at BID_PRICE_INDEX -- shared by the win-rate model's base (pre
@@ -293,12 +336,15 @@ class BanditPolicy:
         X_market_base = self._market_features(contexts)
         base_eta_mean = X_market_base @ self.win_rate_model.mu
         base_eta_var = self.win_rate_model.variance(X_market_base)
-        # Clipped to [0, 8] before expm1 -- a log-price ceiling of expm1(8)
-        # ~= 2980 RMB/CPM, ~10x the realistic max (see market_model.py's
-        # ~227-300 observed range), generous headroom but a hard guard
-        # against overflow if several clipped-but-still-large coefficients
-        # (see OnlineBayesianLinearModel.update's +-20 clamp) sum on one row.
-        price_sample = np.expm1(np.clip(self.price_model.predict(X_market_base), 0.0, 8.0))
+
+        if not self.first_price:
+            # Clipped to [0, 8] before expm1 -- a log-price ceiling of
+            # expm1(8) ~= 2980 RMB/CPM, ~10x the realistic max (see
+            # market_model.py's ~227-300 observed range), generous headroom
+            # but a hard guard against overflow if several clipped-but-
+            # still-large coefficients (see OnlineBayesianLinearModel.
+            # update's +-20 clamp) sum on one row.
+            price_sample = np.expm1(np.clip(self.price_model.predict(X_market_base), 0.0, 8.0))
 
         X_ctr = self._ctr_features(contexts)
         ctr_sample = self.ctr_model.sample_predict(X_ctr, self.rng)
@@ -307,10 +353,9 @@ class BanditPolicy:
         # fix) -- an absolute gap left lambda_ctr's contribution negligible
         # regardless of eta, since CTR values here are ~1e-4 scale.
         ctr_gap = (ctr_sample - self.ctr_floor) / self.ctr_floor
-        net_value_per_win = self.lambda_delivery + self.lambda_ctr * ctr_gap - price_sample / 1000.0
-        worth_bidding = net_value_per_win > 0
+        base_value = self.lambda_delivery + self.lambda_ctr * ctr_gap  # level-independent part
 
-        best_win_prob = np.full(n, -1.0)
+        best_adjusted_value = np.zeros(n)  # skip = 0.0, an explicit competing option
         best_level = np.zeros(n)
         for level in BID_LEVELS:
             bid_norm = level / _BID_NORM
@@ -319,11 +364,14 @@ class BanditPolicy:
             eta_sample = eta_mean + self.rng.standard_normal(n) * np.sqrt(np.maximum(eta_var, 0.0))
             win_prob_sample = _sigmoid(eta_sample)
 
-            better = win_prob_sample > best_win_prob
-            best_win_prob = np.where(better, win_prob_sample, best_win_prob)
+            cost = level if self.first_price else price_sample
+            adjusted_value = win_prob_sample * (base_value - cost / 1000.0)
+
+            better = adjusted_value > best_adjusted_value
+            best_adjusted_value = np.where(better, adjusted_value, best_adjusted_value)
             best_level = np.where(better, level, best_level)
 
-        return np.where(worth_bidding, best_level, 0.0)
+        return best_level
 
     def observe(self, contexts: pd.DataFrame, chosen_bids: np.ndarray, won: np.ndarray, clicked: np.ndarray, price_paid: np.ndarray) -> None:
         """Update the three online learners from realized outcomes for one
@@ -343,5 +391,8 @@ class BanditPolicy:
             X_ctr = self._ctr_features(contexts.loc[won_mask])
             self.ctr_model.update(X_ctr, clicked[won_mask].astype(float))
 
-            X_price = self._market_features(contexts.loc[won_mask])
-            self.price_model.update(X_price, np.log1p(price_paid[won_mask]))
+            if not self.first_price:
+                # Nothing to learn under first-price: cost is exactly the
+                # bid the policy itself chose, not an unknown to estimate.
+                X_price = self._market_features(contexts.loc[won_mask])
+                self.price_model.update(X_price, np.log1p(price_paid[won_mask]))
