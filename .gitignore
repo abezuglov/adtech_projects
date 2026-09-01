@@ -30,3 +30,10 @@ Thumbs.db
 *.pkl
 *.joblib
 !reports/figures/*
+
+# Large regenerated trajectory-dump reports (9-16MB+, one run per regenerate;
+# regenerate via scripts/run_synthetic_bandit.py / run_scenario_grid.py).
+# Small summary reports (e.g. naive-baseline results, no trajectory data)
+# stay tracked.
+reports/synthetic_bandit_results*.json
+reports/synthetic_scenario_grid_results*.json
