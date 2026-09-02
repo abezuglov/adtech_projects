@@ -229,6 +229,12 @@ def simulate_synthetic_flight(
     outcome_seed: int = 0,
     max_overrun_multiple: float = 3.0,
     track_trajectory: bool = False,
+    pace_convexity: float = pacing.PACE_CONVEXITY,
+    eta_delivery: float = 0.1,
+    eta_ctr: float = 0.15,
+    lambda_delivery_max: float = SYNTHETIC_LAMBDA_DELIVERY_MAX,
+    lambda_ctr_max: float = SYNTHETIC_LAMBDA_CTR_MAX,
+    pacing_controller=None,
 ) -> dict:
     """Sequential auction replay against a SyntheticEnvironment. Same
     result-dict shape as simulator.simulate_flight for direct comparability,
@@ -239,6 +245,25 @@ def simulate_synthetic_flight(
     (AUCTIONS_PER_HOUR-scaled, not `batch_size` itself, so pacing's
     elapsed_fraction reflects the scenario's own generation assumptions
     regardless of what batch_size a given run happens to use).
+
+    `pace_convexity`/`eta_delivery`/`eta_ctr`/`lambda_delivery_max`/
+    `lambda_ctr_max` default to exactly what this function hardcoded before
+    (pacing.py's own defaults + this module's SYNTHETIC_LAMBDA_*_MAX) --
+    exposed as parameters so hindsight_pacing.py's grid search can vary them
+    per candidate without monkeypatching module globals. This is a narrower,
+    earlier seam than the full pacing_controller swap: varying these five
+    scalars covers the analytic formula's own hyperparameters, which is all
+    the hindsight search needs.
+
+    `pacing_controller`, if given (a pacing.AnalyticPacingController or
+    learned_pacing.LearnedPacingController -- anything with a matching
+    `.update(...)` signature), REPLACES the pace_convexity/eta_*/lambda_*_max
+    parameters above entirely for computing the next lambda_delivery/
+    lambda_ctr. Default `None` preserves this function's exact prior
+    behavior (byte-for-byte) via the five scalar parameters -- this is
+    Stage 4 of plans/lucky-coalescing-crystal.md's plug-in point, letting
+    scripts/run_synthetic_bandit.py's `--pacing {analytic,learned}` flag
+    swap controllers without touching this function's default call path.
     """
     target = scenario["target_impressions"]
     nominal_days = scenario["flight_length_days"]
@@ -287,12 +312,23 @@ def simulate_synthetic_flight(
         hours_used += batch_size / AUCTIONS_PER_HOUR
         elapsed_fraction = hours_used / nominal_hours
         running_ctr = clicks / delivered if delivered > 0 else 0.0
-        policy.lambda_delivery = pacing.update_delivery_lambda(
-            policy.lambda_delivery, delivered, target, elapsed_fraction, lambda_max=SYNTHETIC_LAMBDA_DELIVERY_MAX
-        )
-        policy.lambda_ctr = pacing.update_ctr_lambda(
-            policy.lambda_ctr, running_ctr, ctr_floor, delivered, lambda_max=SYNTHETIC_LAMBDA_CTR_MAX
-        )
+        if pacing_controller is None:
+            policy.lambda_delivery = pacing.update_delivery_lambda(
+                policy.lambda_delivery,
+                delivered,
+                target,
+                elapsed_fraction,
+                eta=eta_delivery,
+                lambda_max=lambda_delivery_max,
+                pace_convexity=pace_convexity,
+            )
+            policy.lambda_ctr = pacing.update_ctr_lambda(
+                policy.lambda_ctr, running_ctr, ctr_floor, delivered, eta=eta_ctr, lambda_max=lambda_ctr_max
+            )
+        else:
+            policy.lambda_delivery, policy.lambda_ctr = pacing_controller.update(
+                policy.lambda_delivery, policy.lambda_ctr, delivered, target, elapsed_fraction, running_ctr, ctr_floor
+            )
 
         if track_trajectory:
             batch_won = int(won.sum())
