@@ -426,11 +426,21 @@ def solve_delivery_bid_synthetic(
     tol: float = 1e-4,
     max_iter: int = 40,
     mc_pool_size: int = MC_POOL_SIZE,
+    bid_levels: np.ndarray | None = None,
 ) -> dict:
     """Bisection search for the fixed bid expected to deliver
     `target_impressions` over a flight of `n_flight` auctions -- mirrors
     bidding.solve_delivery_bid; valid since true_win_prob is monotone in
-    bid by construction (world.beta > 0), not merely a fitted constraint."""
+    bid by construction (world.beta > 0), not merely a fitted constraint.
+
+    `bid_levels`, if given, restricts the search to the cheapest of those
+    discrete levels whose expected rate still clears the target -- for a
+    fair comparison against a bandit that's itself confined to a discrete
+    grid (bandit.BID_LEVELS). Continuous bisection (the default) hands the
+    naive baseline a degree of bid-precision no discretized policy has,
+    which was found to explain a real chunk of the apparent naive-vs-bandit
+    CPM gap (see reports/pacing_comparison.json's discussion) -- this isn't
+    a hypothetical concern, it materially changes the comparison."""
     pool = _mc_pool(world, campaign_id, rng, mc_pool_size)
     placement = pool["placement"].to_numpy()
     hour = pool["hour"].to_numpy()
@@ -438,6 +448,23 @@ def solve_delivery_bid_synthetic(
 
     def rate_at(bid: float) -> float:
         return float(true_win_prob(world, placement, hour, bid).mean())
+
+    if bid_levels is not None:
+        levels = np.sort(np.asarray(bid_levels))
+        rates = np.array([rate_at(level) for level in levels])
+        eligible = np.where(rates >= target_rate)[0]
+        idx = int(eligible[0]) if len(eligible) > 0 else int(np.argmax(rates))
+        bid = float(levels[idx])
+        achieved_rate = float(rates[idx])
+        return {
+            "bid": bid,
+            "n_eligible": n_flight,
+            "target_impressions": target_impressions,
+            "target_win_rate": target_rate,
+            "achieved_win_rate": achieved_rate,
+            "expected_impressions": achieved_rate * n_flight,
+            "target_reachable_in_bounds": bool(target_rate <= rates.max()),
+        }
 
     lo, hi = bid_bounds
     rate_lo, rate_hi = rate_at(lo), rate_at(hi)

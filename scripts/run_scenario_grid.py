@@ -13,10 +13,11 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from adtech_rtb.bandit import BanditPolicy  # noqa: E402
+from adtech_rtb.bandit import DEFAULT_BID_BOUNDS, BanditPolicy  # noqa: E402
 from adtech_rtb.synthetic import (  # noqa: E402
     CTR_CATEGORICAL_COLUMNS,
     MARKET_CATEGORICAL_COLUMNS,
@@ -49,6 +50,7 @@ MAX_OVERRUN_MULTIPLE = 6.0
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pacing", choices=["analytic", "learned"], default="analytic")
+    parser.add_argument("--bid-levels", type=int, default=6)
     args = parser.parse_args()
 
     world = load_world(WORLD_PATH)
@@ -57,6 +59,7 @@ def main() -> None:
 
     environment = SyntheticEnvironment(world)
     pacing_controller = build_pacing_controller(args.pacing)
+    bid_levels = np.linspace(DEFAULT_BID_BOUNDS[0], DEFAULT_BID_BOUNDS[1], args.bid_levels)
 
     results = []
     for s in scenarios:
@@ -67,6 +70,7 @@ def main() -> None:
             market_categorical_columns=MARKET_CATEGORICAL_COLUMNS,
             ctr_categorical_columns=CTR_CATEGORICAL_COLUMNS,
             numeric_columns=NUMERIC_COLUMNS,
+            bid_levels=bid_levels,
         )
         t0 = time.time()
         result = simulate_synthetic_flight(
@@ -108,6 +112,7 @@ def main() -> None:
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "" if args.pacing == "analytic" else f".{args.pacing}_pacing"
+    suffix += "" if args.bid_levels == 6 else f".{args.bid_levels}levels"
     out_path = REPORTS_DIR / f"synthetic_scenario_grid_results{suffix}.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)

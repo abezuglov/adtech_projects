@@ -253,6 +253,7 @@ class BanditPolicy:
         numeric_columns: list[str],
         seed: int = 0,
         first_price: bool = False,
+        bid_levels: np.ndarray | None = None,
     ):
         self.rng = np.random.default_rng(seed)
         # First-price mode (Phase 5 synthetic environment): you pay exactly
@@ -262,6 +263,12 @@ class BanditPolicy:
         # bid. See choose_bids/observe below for how this flag changes the
         # decision and update logic.
         self.first_price = first_price
+        # Defaults to the module-level 6-level grid (unchanged behavior for
+        # every existing caller); overridable per-policy so experiments with
+        # finer discretization (e.g. testing whether the CPM gap vs. naive's
+        # continuous-bid closed-form solver shrinks with more levels) don't
+        # require mutating the module constant everyone else also reads.
+        self.bid_levels = BID_LEVELS if bid_levels is None else np.asarray(bid_levels)
         self._market_categorical_columns = market_categorical_columns
         self._ctr_categorical_columns = ctr_categorical_columns
         self._numeric_columns = numeric_columns
@@ -361,7 +368,7 @@ class BanditPolicy:
 
         best_adjusted_value = np.zeros(n)  # skip = 0.0, an explicit competing option
         best_level = np.zeros(n)
-        for level in BID_LEVELS:
+        for level in self.bid_levels:
             bid_norm = level / _BID_NORM
             eta_mean = base_eta_mean + bid_norm * self.win_rate_model.mu[BID_PRICE_INDEX]
             eta_var = base_eta_var + (bid_norm**2) / self.win_rate_model.q[BID_PRICE_INDEX]

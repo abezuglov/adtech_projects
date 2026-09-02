@@ -10,6 +10,7 @@ exactly what you bid on every win, so expected spend / expected impressions
 run_synthetic_bandit.py's results.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from adtech_rtb.bandit import DEFAULT_BID_BOUNDS  # noqa: E402
 from adtech_rtb.synthetic import evaluate_flat_bid_synthetic, solve_delivery_bid_synthetic  # noqa: E402
 from adtech_rtb.synthetic_world import load_world  # noqa: E402
 
@@ -30,6 +32,17 @@ DELIVERY_TOLERANCE = 0.01
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    # Default 0 = continuous bisection (unchanged behavior). A positive value
+    # restricts the naive solver to that many discrete bid levels -- the
+    # cheapest one that still clears the delivery target -- for a fair
+    # comparison against a bandit confined to the same discretization (see
+    # run_synthetic_bandit.py's own --bid-levels flag and
+    # solve_delivery_bid_synthetic's docstring).
+    parser.add_argument("--bid-levels", type=int, default=0)
+    args = parser.parse_args()
+    bid_levels = None if args.bid_levels == 0 else np.linspace(*DEFAULT_BID_BOUNDS, args.bid_levels)
+
     world = load_world(WORLD_PATH)
     with open(SCENARIOS_PATH) as f:
         scenarios = yaml.safe_load(f)["scenarios"]
@@ -41,7 +54,9 @@ def main() -> None:
 
     for s in scenarios:
         rng = np.random.default_rng(s["seed"])
-        solved = solve_delivery_bid_synthetic(world, s["campaign_id"], s["target_impressions"], s["n_eligible_auctions"], rng)
+        solved = solve_delivery_bid_synthetic(
+            world, s["campaign_id"], s["target_impressions"], s["n_eligible_auctions"], rng, bid_levels=bid_levels
+        )
         outcome = evaluate_flat_bid_synthetic(world, s["campaign_id"], solved["bid"], s["n_eligible_auctions"], rng)
 
         delivery_ratio = outcome["expected_impressions"] / s["target_impressions"]
@@ -84,7 +99,8 @@ def main() -> None:
     )
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / "synthetic_naive_baseline_results.json"
+    suffix = "" if args.bid_levels == 0 else f".{args.bid_levels}levels"
+    out_path = REPORTS_DIR / f"synthetic_naive_baseline_results{suffix}.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Wrote results -> {out_path}")
