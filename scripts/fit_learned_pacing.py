@@ -27,9 +27,29 @@ DATASET_PATH = REPO_ROOT / "reports" / "hindsight_pacing_dataset.npz"
 MODEL_PATH = REPO_ROOT / "data" / "interim" / "learned_pacing_model.json"
 
 
+def _upgrade_legacy_dataset(X: np.ndarray) -> np.ndarray:
+    """The cached Stage 2 dataset (reports/hindsight_pacing_dataset.npz) was
+    generated before `pacing_error_sq_behind` existed -- it has 4 columns
+    (elapsed_fraction, pacing_error, ctr_error, delivered_fraction), one
+    short of the current 5-feature STATE_FEATURE_NAMES. Rather than re-run
+    the ~1hr hindsight search just to add a feature that's a deterministic
+    function of a column already in the dataset, derive it here and insert
+    it in the right slot. A full regeneration (generate_hindsight_pacing_data.py)
+    would produce the 5-column version natively -- this is a one-time bridge,
+    not the long-term path.
+    """
+    if X.shape[1] == len(STATE_FEATURE_NAMES):
+        return X
+    if X.shape[1] != len(STATE_FEATURE_NAMES) - 1:
+        raise ValueError(f"Unexpected feature count {X.shape[1]}, expected {len(STATE_FEATURE_NAMES)} or {len(STATE_FEATURE_NAMES) - 1}")
+    pacing_error_col = X[:, 1]
+    sq_behind = np.maximum(pacing_error_col, 0.0) ** 2
+    return np.concatenate([X[:, :2], sq_behind[:, None], X[:, 2:]], axis=1)
+
+
 def main() -> None:
     data = np.load(DATASET_PATH)
-    X, y = data["X"], data["y"]
+    X, y = _upgrade_legacy_dataset(data["X"]), data["y"]
     print(f"Loaded {len(X)} training pairs, {X.shape[1]} features: {STATE_FEATURE_NAMES}")
 
     X_bias = np.concatenate([np.ones((len(X), 1)), X], axis=1)

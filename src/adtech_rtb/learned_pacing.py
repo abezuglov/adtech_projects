@@ -22,7 +22,7 @@ from .pacing import ctr_error, pacing_error
 # construction in extract_training_pairs -- both are responsible for the
 # same feature order/definition, since a model fit on one and evaluated with
 # the other would silently score wrong-column features against each weight.
-STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "ctr_error", "delivered_fraction")
+STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "pacing_error_sq_behind", "ctr_error", "delivered_fraction")
 
 
 def pacing_state_features(
@@ -33,16 +33,23 @@ def pacing_state_features(
     ctr_floor: float,
     pace_convexity: float = 1.0,
 ) -> np.ndarray:
-    """The same 4 features hindsight_pacing.extract_training_pairs computes
+    """The same 5 features hindsight_pacing.extract_training_pairs computes
     per trajectory step, computed here from live simulate_synthetic_flight
     state instead of a stored trajectory. Reuses pacing.py's own
     pacing_error/ctr_error rather than reimplementing them, so a future
     change to either formula can't silently drift between training and
-    inference.
+    inference. `pacing_error_sq_behind` (see hindsight_pacing.py's
+    extract_training_pairs for the full rationale) lets the fit react
+    superlinearly once genuinely far behind pace, without changing its
+    behavior in the mild-deficit regime a single linear pacing_error term
+    already handles reasonably.
     """
     p_err = pacing_error(delivered, target_impressions, elapsed_fraction, pace_convexity)
     c_err = ctr_error(running_ctr, ctr_floor, delivered)
-    return np.array([min(elapsed_fraction, 3.0), p_err, c_err, delivered / max(target_impressions, 1)])
+    p_err_sq_behind = max(0.0, p_err) ** 2
+    return np.array(
+        [min(elapsed_fraction, 3.0), p_err, p_err_sq_behind, c_err, delivered / max(target_impressions, 1)]
+    )
 
 
 class LearnedPacingController:

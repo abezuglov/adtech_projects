@@ -122,14 +122,16 @@ def test_extract_training_pairs_state_target_alignment():
     assert y.shape == (2, 2)
 
     # Step 0: elapsed_fraction=0.5, delivered=50/target=100 exactly on a
-    # linear (pace_convexity=1.0) pace -> pacing_error=0; running_ctr=0.02
-    # vs floor=0.01 -> ctr_error=(0.01-0.02)/0.01=-1.0; delivered_fraction=0.5.
-    np.testing.assert_allclose(X[0], [0.5, 0.0, -1.0, 0.5])
+    # linear (pace_convexity=1.0) pace -> pacing_error=0 -> sq_behind=0;
+    # running_ctr=0.02 vs floor=0.01 -> ctr_error=(0.01-0.02)/0.01=-1.0;
+    # delivered_fraction=0.5.
+    np.testing.assert_allclose(X[0], [0.5, 0.0, 0.0, -1.0, 0.5])
     np.testing.assert_allclose(y[0], [0.1, 0.0])
 
     # Step 1: elapsed_fraction=1.0, delivered=100/target=100 exactly on pace
-    # -> pacing_error=0; same running_ctr/floor -> ctr_error=-1.0; delivered_fraction=1.0.
-    np.testing.assert_allclose(X[1], [1.0, 0.0, -1.0, 1.0])
+    # -> pacing_error=0 -> sq_behind=0; same running_ctr/floor -> ctr_error=-1.0;
+    # delivered_fraction=1.0.
+    np.testing.assert_allclose(X[1], [1.0, 0.0, 0.0, -1.0, 1.0])
     np.testing.assert_allclose(y[1], [0.2, 0.0])
 
 

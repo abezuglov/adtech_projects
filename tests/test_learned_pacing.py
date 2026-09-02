@@ -22,16 +22,33 @@ def test_pacing_state_features_shape_and_order():
     features = pacing_state_features(
         delivered=50, target_impressions=100, elapsed_fraction=0.5, running_ctr=0.02, ctr_floor=0.01
     )
-    assert features.shape == (4,)
+    assert features.shape == (5,)
     # delivered_fraction is the last feature.
-    assert features[3] == 0.5
+    assert features[4] == 0.5
+
+
+def test_pacing_state_features_sq_behind_zero_when_ahead_of_pace():
+    # Ahead of pace (pacing_error < 0) -> pacing_error_sq_behind must be exactly 0.
+    features = pacing_state_features(
+        delivered=90, target_impressions=100, elapsed_fraction=0.5, running_ctr=0.01, ctr_floor=0.01
+    )
+    assert features[1] < 0  # pacing_error itself is negative (ahead of pace)
+    assert features[2] == 0.0  # sq_behind clipped to 0
+
+
+def test_pacing_state_features_sq_behind_matches_squared_error_when_behind():
+    features = pacing_state_features(
+        delivered=10, target_impressions=100, elapsed_fraction=0.5, running_ctr=0.01, ctr_floor=0.01
+    )
+    assert features[1] > 0  # behind pace
+    assert features[2] == features[1] ** 2
 
 
 def test_learned_pacing_controller_clips_to_lambda_max():
     # Extreme positive weights should still be clipped at lambda_delivery_max/lambda_ctr_max.
     controller = LearnedPacingController(
-        delivery_weights=[100.0, 0.0, 0.0, 0.0, 0.0],
-        ctr_weights=[100.0, 0.0, 0.0, 0.0, 0.0],
+        delivery_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ctr_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         lambda_delivery_max=1.5,
         lambda_ctr_max=1.5,
     )
@@ -50,8 +67,8 @@ def test_learned_pacing_controller_clips_to_lambda_max():
 
 def test_learned_pacing_controller_clips_to_zero():
     controller = LearnedPacingController(
-        delivery_weights=[-100.0, 0.0, 0.0, 0.0, 0.0],
-        ctr_weights=[-100.0, 0.0, 0.0, 0.0, 0.0],
+        delivery_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ctr_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         lambda_delivery_max=1.5,
         lambda_ctr_max=1.5,
     )

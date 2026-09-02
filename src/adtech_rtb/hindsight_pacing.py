@@ -183,7 +183,7 @@ def _sub_result_from_suffix(trajectory: list[dict], start_idx: int, scenario: di
     }
 
 
-STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "ctr_error", "delivered_fraction")
+STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "pacing_error_sq_behind", "ctr_error", "delivered_fraction")
 
 
 def extract_training_pairs(
@@ -210,10 +210,24 @@ def extract_training_pairs(
             elapsed_fraction = step["days_used"] / scenario["flight_length_days"] if scenario["flight_length_days"] else 0.0
             p_err = pacing_error(step["cumulative_delivered"], scenario["target_impressions"], elapsed_fraction, pace_convexity)
             c_err = ctr_error(step["running_ctr"], scenario["ctr_floor"], step["cumulative_delivered"])
+            # Signed-square, BEHIND-only ("relu-squared"): a single linear
+            # coefficient on pacing_error alone has to compromise between
+            # "mild deficits should barely react" (needed for the easy/slack
+            # scenarios, where it currently gets this right) and "severe
+            # deficits need to react sharply" (needed for near-ceiling
+            # scenarios, where it currently under-reacts for a very long
+            # time -- see plans/lucky-coalescing-crystal.md's Stage-4
+            # trajectory diagnosis). This lets the fit assign extra,
+            # separate slope to the severe-deficit regime without changing
+            # its behavior in the mild regime. Squared and clipped to
+            # behind-pace only (max(0, .)) -- being AHEAD of pace never
+            # needs a superlinear reaction, only behind does.
+            p_err_sq_behind = max(0.0, p_err) ** 2
             features = np.array(
                 [
                     min(elapsed_fraction, 3.0),
                     p_err,
+                    p_err_sq_behind,
                     c_err,
                     step["cumulative_delivered"] / max(scenario["target_impressions"], 1),
                 ]
