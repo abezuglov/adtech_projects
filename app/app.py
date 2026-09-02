@@ -201,8 +201,9 @@ def build_frames(scenario_id: str):
 
 st.title("RTB Campaign Delivery Optimizer — Live Bandit Demo")
 st.caption(
-    "Constrained contextual bandit delivering impressions at a CTR floor, minimizing spend, "
-    "in a synthetic first-price auction environment. Replaying a precomputed flight batch-by-batch."
+    "The power of context: naive knows the true auction economics perfectly but must bid one flat number "
+    "for the whole campaign; the bandit starts knowing nothing but can price by placement and time. "
+    "Replaying a precomputed flight batch-by-batch — see the [repo README](https://github.com/abezuglov/adtech_projects) for the full result."
 )
 
 scenarios = get_scenarios()
