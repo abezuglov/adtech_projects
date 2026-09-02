@@ -1,20 +1,45 @@
 """Live Streamlit demo: replay one synthetic delivery scenario batch-by-
-batch, showing the cold-start bandit's behavior against the naive flat-bid
-baseline as the flight progresses.
+batch, showing the bandit's behavior against a FAIR naive flat-bid baseline
+(same discretized bid grid, not naive's own unconstrained continuous bid --
+see below) as the flight progresses.
 
 Design: this app does NOT run the simulator itself. A synthetic flight is
 pure numpy but still takes minutes per scenario at the pipeline's real
 BATCH_SIZE (~2-4 min; a few scenarios run longer -- see
 scripts/run_synthetic_bandit.py's own elapsed_seconds output), which is a
 multi-minute spinner if triggered live on scenario selection -- unacceptable
-for a demo meant to be clicked through quickly. Instead, the app reads the
-already-validated `reports/synthetic_bandit_results.json` (produced by
-`python scripts/run_synthetic_bandit.py`, which must be re-run any time
-simulate_synthetic_flight's trajectory schema changes) and replays its
+for a demo meant to be clicked through quickly. Instead, the app reads
+already-validated result files (produced by `python scripts/run_synthetic_bandit.py`
+/`run_scenario_grid.py`, which must be re-run any time
+simulate_synthetic_flight's trajectory schema changes) and replays the
 precomputed `trajectory` list -- downsampled to MAX_FRAMES steps so
 scrubbing/autoplay stays smooth regardless of how many raw batches the real
 flight took. A useful side effect: this app has no dependency on pymc/scipy/
 the modeling stack at all, only on the JSON results and light plotting libs.
+
+Featured bandit config: LEARNED pacing (the outer-loop regression-fit
+controller, not the hand-tuned analytic Lagrangian formula -- see
+learned_pacing.py) at the default 6 discretized bid levels. This is a
+deliberate choice, not the only config that was ever run: the analytic
+pacing controller, re-tuned for near-ceiling delivery targets, no longer
+beats even a fair naive baseline on CPM (see reports/pacing_comparison.json
+and the README's "Learned pacing" section for the full comparison) -- it's
+reliable (hits delivery + CTR floor everywhere) but not cost-competitive.
+Learned pacing recovers that, landing at ~parity with naive on average and
+ahead of it on the hardest ("challenging") scenarios.
+
+Naive's own baseline is deliberately solved over the SAME 6-level discrete
+grid the bandit is confined to (`--bid-levels 6`), not naive's own
+unconstrained continuous bid -- solve_delivery_bid_synthetic's default
+bisection search picks any real-valued bid, which is an advantage no
+discretized policy has. Comparing the bandit against that continuous
+optimum was found to inflate the apparent gap substantially (see the
+README) -- both sides now search the identical discrete action space, which
+is the fair, apples-to-apples comparison point. (A 25-level variant was
+also tried -- see the README -- and made things *worse* for both
+controllers, most likely the added cold-start exploration cost of 26
+actions instead of 7 outweighing the finer bid precision; 6 levels stayed
+the featured config.)
 """
 
 import itertools
@@ -29,16 +54,20 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS_PATH = REPO_ROOT / "config" / "synthetic_scenarios.yaml"
-NAIVE_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_naive_baseline_results.json"
-BANDIT_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_bandit_results.json"
+# .6levels = naive solved over the same 6-level grid the bandit uses, not its
+# own unconstrained continuous bid (see module docstring).
+NAIVE_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_naive_baseline_results.6levels.json"
+# .learned_pacing = the outer-loop regression-fit pacing controller, not the
+# hand-tuned analytic Lagrangian formula (see module docstring).
+BANDIT_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_bandit_results.learned_pacing.json"
 
 # Designed 2x2x2 factorial grid (duration x ctr_level x avails; see
 # scripts/generate_scenario_grid.py) -- merged into the same selector as the
 # random per-campaign set above, not a separate view, so the demo can show
 # both "broad coverage" and "one axis at a time" scenarios side by side.
 GRID_SCENARIOS_PATH = REPO_ROOT / "config" / "synthetic_scenario_grid.yaml"
-GRID_NAIVE_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_naive_baseline_grid_results.json"
-GRID_BANDIT_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_scenario_grid_results.json"
+GRID_NAIVE_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_naive_baseline_grid_results.6levels.json"
+GRID_BANDIT_RESULTS_PATH = REPO_ROOT / "reports" / "synthetic_scenario_grid_results.learned_pacing.json"
 
 # Mirrors bandit.DEFAULT_BID_BOUNDS/BID_LEVELS -- duplicated here (not
 # imported) so this app has no import-time dependency on the modeling stack,
@@ -206,8 +235,8 @@ n_frames = data["n_frames"]
 if result["overrun_ratio"] > 1.05:
     st.caption(
         f"⏱ This flight runs {result['overrun_ratio']:.2f}x past its nominal {scenario['flight_length_days']}d "
-        "window: the CTR-floor constraint makes the bandit bid more conservatively than the naive flat bid, "
-        "trading pacing speed for lower CPM."
+        "window: the bandit cold-starts with no prior knowledge of win rates or CTR, so early exploration "
+        "and pacing correction can push a flight past its nominal length even when it ultimately hits target."
     )
 
 if "frame" not in st.session_state or st.session_state.get("scenario_id") != scenario_id:
@@ -365,7 +394,7 @@ if st.session_state.get("play"):
     st.rerun()
 
 st.divider()
-st.subheader("Full-flight result (validated, matches reports/synthetic_bandit_results.json)")
+st.subheader("Full-flight result (validated, matches reports/synthetic_bandit_results.learned_pacing.json)")
 final_cpm = result["spend"] / max(result["delivered_impressions"], 1) * 1000
 cpm_improvement = (naive["cpm"] - final_cpm) / naive["cpm"]
 r = st.columns(5)
@@ -376,8 +405,10 @@ r[3].metric("CTR floor met", "Yes" if result["ctr_met"] else "No")
 r[4].metric("Delivery smoothness (CV)", f"{result['delivery_cv']:.2f}", "lower = steadier")
 
 st.caption(
-    "Naive baseline is a closed-form constant flat bid (see solve_delivery_bid_synthetic); under first-price "
-    "auctions its CPM is exactly the solved bid, shown as the dashed reference line above. "
+    "Naive baseline is a closed-form constant flat bid, solved over the SAME 6-level discrete bid grid the "
+    "bandit uses (see solve_delivery_bid_synthetic's bid_levels option) -- not naive's own unconstrained "
+    "continuous bid, which was found to inflate the apparent gap. Under first-price auctions its CPM is "
+    "exactly the solved bid, shown as the dashed reference line above. "
     "See the [repo README](https://github.com/abezuglov/adtech_projects) for the full methodology, including why "
-    "this project moved from real GSP data to a synthetic first-price environment."
+    "this project moved from real GSP data to a synthetic first-price environment, and the fair-baseline finding."
 )

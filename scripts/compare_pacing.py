@@ -21,17 +21,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REPORTS_DIR = REPO_ROOT / "reports"
 
 # (analytic results, learned results, naive-baseline results, label)
+#
+# Naive files are the `.6levels` variant -- naive solved over the SAME
+# 6-level discrete bid grid the bandit itself defaults to
+# (solve_delivery_bid_synthetic's bid_levels option), NOT naive's own
+# unconstrained continuous bid. Comparing the bandit against a continuous-bid
+# naive was found to inflate the apparent CPM gap substantially (see the
+# README's "Learned pacing" section) -- this is the fair comparison point.
 COMPARISON_SETS = [
     (
         REPORTS_DIR / "synthetic_bandit_results.json",
         REPORTS_DIR / "synthetic_bandit_results.learned_pacing.json",
-        REPORTS_DIR / "synthetic_naive_baseline_results.json",
+        REPORTS_DIR / "synthetic_naive_baseline_results.6levels.json",
         "random per-campaign scenarios",
     ),
     (
         REPORTS_DIR / "synthetic_scenario_grid_results.json",
         REPORTS_DIR / "synthetic_scenario_grid_results.learned_pacing.json",
-        REPORTS_DIR / "synthetic_naive_baseline_grid_results.json",
+        REPORTS_DIR / "synthetic_naive_baseline_grid_results.6levels.json",
         "designed 2x2x2 grid",
     ),
 ]
@@ -73,8 +80,11 @@ def compare_one_set(analytic_path: Path, learned_path: Path, naive_path: Path, l
             "cpm_analytic": round(cpm_a, 2),
             "cpm_learned": round(cpm_l, 2),
             "cpm_change_pct": round((cpm_l - cpm_a) / cpm_a * 100, 1) if cpm_a > 0 else None,
-            "cpm_vs_naive_analytic_pct": round((cpm_a - naive_cpm) / naive_cpm * 100, 1) if naive_cpm else None,
-            "cpm_vs_naive_learned_pct": round((cpm_l - naive_cpm) / naive_cpm * 100, 1) if naive_cpm else None,
+            # Positive = bandit beats naive (lower CPM), matching app.py's own
+            # cpm_improvement sign convention -- NOT the (bandit - naive)/naive
+            # convention this used to use, which reads backwards at a glance.
+            "cpm_vs_naive_analytic_pct": round((naive_cpm - cpm_a) / naive_cpm * 100, 1) if naive_cpm else None,
+            "cpm_vs_naive_learned_pct": round((naive_cpm - cpm_l) / naive_cpm * 100, 1) if naive_cpm else None,
             "delivery_cv_analytic": round(a["delivery_cv"], 2),
             "delivery_cv_learned": round(l["delivery_cv"], 2),
             "overrun_analytic": round(a["overrun_ratio"], 2),
@@ -112,9 +122,16 @@ def main() -> None:
     n_ctr_met_learned = sum(r["ctr_met_learned"] for r in all_rows)
     avg_cv_analytic = sum(r["delivery_cv_analytic"] for r in all_rows) / n
     avg_cv_learned = sum(r["delivery_cv_learned"] for r in all_rows) / n
+    vs_naive_a = [r["cpm_vs_naive_analytic_pct"] for r in all_rows if r["cpm_vs_naive_analytic_pct"] is not None]
+    vs_naive_l = [r["cpm_vs_naive_learned_pct"] for r in all_rows if r["cpm_vs_naive_learned_pct"] is not None]
 
     print(f"\n=== Summary across {n} scenarios ===")
     print(f"Avg CPM change (learned vs analytic): {avg_cpm_change:+.1f}%")
+    if vs_naive_a:
+        avg_a, avg_l = sum(vs_naive_a) / len(vs_naive_a), sum(vs_naive_l) / len(vs_naive_l)
+        wins_a = sum(1 for v in vs_naive_a if v > 0)
+        wins_l = sum(1 for v in vs_naive_l if v > 0)
+        print(f"Avg CPM vs. fair naive: analytic {avg_a:+.1f}% ({wins_a}/{len(vs_naive_a)} beat naive), " f"learned {avg_l:+.1f}% ({wins_l}/{len(vs_naive_l)} beat naive)")
     print(f"Avg delivery_cv: {avg_cv_analytic:.2f} -> {avg_cv_learned:.2f}")
     print(f"Delivery target met: {n_delivery_met_analytic}/{n} -> {n_delivery_met_learned}/{n}")
     print(f"CTR floor met: {n_ctr_met_analytic}/{n} -> {n_ctr_met_learned}/{n}")
