@@ -117,6 +117,38 @@ MIN_DELIVERED_FOR_CTR_JUDGMENT = 30
 PACE_CONVEXITY = 1.0
 
 
+def pacing_error(
+    delivered: int,
+    target_impressions: int,
+    elapsed_fraction: float,
+    pace_convexity: float = PACE_CONVEXITY,
+) -> float:
+    """Normalized gap between expected and actual cumulative delivery
+    (positive = behind pace, negative = ahead). Extracted out of
+    update_delivery_lambda as its own pure function so a hindsight-search /
+    learned-pacing pipeline can compute this signal without duplicating the
+    expected-pace-curve logic. See update_delivery_lambda's docstring for the
+    elapsed_fraction>1.0 / PACE_CONVEXITY reasoning -- unchanged here.
+    """
+    if elapsed_fraction <= 1.0:
+        expected_cumulative = target_impressions * (elapsed_fraction**pace_convexity)
+    else:
+        expected_cumulative = target_impressions
+    return (expected_cumulative - delivered) / max(target_impressions, 1)
+
+
+def ctr_error(running_ctr: float, ctr_floor: float, delivered: int) -> float:
+    """Relative CTR gap vs. floor (positive = below floor), or exactly 0.0
+    below MIN_DELIVERED_FOR_CTR_JUDGMENT -- extracted out of update_ctr_lambda
+    for the same reason as pacing_error above. Returning 0.0 (rather than the
+    caller special-casing "too early to judge") is behavior-identical to the
+    old no-op: lambda_ctr + eta*0.0 == lambda_ctr.
+    """
+    if delivered < MIN_DELIVERED_FOR_CTR_JUDGMENT:
+        return 0.0
+    return (ctr_floor - running_ctr) / ctr_floor
+
+
 def update_delivery_lambda(
     lambda_delivery: float,
     delivered: int,
@@ -124,6 +156,7 @@ def update_delivery_lambda(
     elapsed_fraction: float,
     eta: float = 0.1,
     lambda_max: float = LAMBDA_DELIVERY_MAX,
+    pace_convexity: float = PACE_CONVEXITY,
 ) -> float:
     """`elapsed_fraction` is time-elapsed / nominal flight length (can
     exceed 1.0 once a flight overruns its nominal length -- see
@@ -176,12 +209,8 @@ def update_delivery_lambda(
     maximize win probability" regardless of price. synthetic.py passes a
     smaller, environment-calibrated cap for this reason.
     """
-    if elapsed_fraction <= 1.0:
-        expected_cumulative = target_impressions * (elapsed_fraction**PACE_CONVEXITY)
-    else:
-        expected_cumulative = target_impressions
-    pacing_error = (expected_cumulative - delivered) / max(target_impressions, 1)
-    return float(min(max(lambda_delivery + eta * pacing_error, 0.0), lambda_max))
+    error = pacing_error(delivered, target_impressions, elapsed_fraction, pace_convexity)
+    return float(min(max(lambda_delivery + eta * error, 0.0), lambda_max))
 
 
 def update_ctr_lambda(
@@ -215,7 +244,5 @@ def update_ctr_lambda(
     (lambda_ctr climbs while bidding is still zero, further delaying the
     first win that would ever produce real CTR data).
     """
-    if delivered < MIN_DELIVERED_FOR_CTR_JUDGMENT:
-        return lambda_ctr
-    ctr_error = (ctr_floor - running_ctr) / ctr_floor
-    return float(min(max(lambda_ctr + eta * ctr_error, 0.0), lambda_max))
+    error = ctr_error(running_ctr, ctr_floor, delivered)
+    return float(min(max(lambda_ctr + eta * error, 0.0), lambda_max))
