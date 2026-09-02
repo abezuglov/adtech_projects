@@ -246,3 +246,53 @@ def update_ctr_lambda(
     """
     error = ctr_error(running_ctr, ctr_floor, delivered)
     return float(min(max(lambda_ctr + eta * error, 0.0), lambda_max))
+
+
+class AnalyticPacingController:
+    """Thin wrapper around update_delivery_lambda/update_ctr_lambda exposing
+    the `.update(...)` interface simulate_synthetic_flight's
+    `pacing_controller` seam expects (see synthetic.py, Stage 4 of
+    plans/lucky-coalescing-crystal.md) -- matched by
+    learned_pacing.LearnedPacingController so the two are interchangeable.
+    This is today's actual bandit pacing, NOT the naive (flat-bid) baseline
+    in scripts/run_synthetic_naive_baseline.py -- see that module's own
+    docstring; don't confuse the two.
+    """
+
+    def __init__(
+        self,
+        eta_delivery: float = 0.1,
+        eta_ctr: float = 0.15,
+        lambda_delivery_max: float = LAMBDA_DELIVERY_MAX,
+        lambda_ctr_max: float = LAMBDA_CTR_MAX,
+        pace_convexity: float = PACE_CONVEXITY,
+    ):
+        self.eta_delivery = eta_delivery
+        self.eta_ctr = eta_ctr
+        self.lambda_delivery_max = lambda_delivery_max
+        self.lambda_ctr_max = lambda_ctr_max
+        self.pace_convexity = pace_convexity
+
+    def update(
+        self,
+        lambda_delivery: float,
+        lambda_ctr: float,
+        delivered: int,
+        target_impressions: int,
+        elapsed_fraction: float,
+        running_ctr: float,
+        ctr_floor: float,
+    ) -> tuple[float, float]:
+        new_lambda_delivery = update_delivery_lambda(
+            lambda_delivery,
+            delivered,
+            target_impressions,
+            elapsed_fraction,
+            eta=self.eta_delivery,
+            lambda_max=self.lambda_delivery_max,
+            pace_convexity=self.pace_convexity,
+        )
+        new_lambda_ctr = update_ctr_lambda(
+            lambda_ctr, running_ctr, ctr_floor, delivered, eta=self.eta_ctr, lambda_max=self.lambda_ctr_max
+        )
+        return new_lambda_delivery, new_lambda_ctr
