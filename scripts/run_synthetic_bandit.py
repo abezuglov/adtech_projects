@@ -16,6 +16,7 @@ realization, not averaged over multiple seeds, same documented limitation
 run_bandit.py carries for the real pipeline.
 """
 
+import argparse
 import json
 import sys
 import time
@@ -25,10 +26,14 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from adtech_rtb.bandit import BanditPolicy  # noqa: E402
+from adtech_rtb.learned_pacing import LearnedPacingController  # noqa: E402
+from adtech_rtb.pacing import AnalyticPacingController  # noqa: E402
 from adtech_rtb.synthetic import (  # noqa: E402
     CTR_CATEGORICAL_COLUMNS,
     MARKET_CATEGORICAL_COLUMNS,
     NUMERIC_COLUMNS,
+    SYNTHETIC_LAMBDA_CTR_MAX,
+    SYNTHETIC_LAMBDA_DELIVERY_MAX,
     SyntheticEnvironment,
     simulate_synthetic_flight,
 )
@@ -38,6 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORLD_PATH = REPO_ROOT / "data" / "interim" / "synthetic_world.json"
 SCENARIOS_PATH = REPO_ROOT / "config" / "synthetic_scenarios.yaml"
 REPORTS_DIR = REPO_ROOT / "reports"
+LEARNED_PACING_MODEL_PATH = REPO_ROOT / "data" / "interim" / "learned_pacing_model.json"
 
 BATCH_SIZE = 2000
 POLICY_SEED = 0
@@ -53,12 +59,36 @@ OUTCOME_SEED = 1
 MAX_OVERRUN_MULTIPLE = 6.0
 
 
+def build_pacing_controller(name: str):
+    """`--pacing analytic` (default) reproduces today's actual bandit exactly
+    -- NOT scripts/run_synthetic_naive_baseline.py's naive flat-bid baseline,
+    see AnalyticPacingController's own docstring. `--pacing learned` swaps in
+    the Stage 3-fit LearnedPacingController; both share the same `.update`
+    interface (see synthetic.py's `pacing_controller` seam)."""
+    if name == "analytic":
+        return AnalyticPacingController(
+            lambda_delivery_max=SYNTHETIC_LAMBDA_DELIVERY_MAX, lambda_ctr_max=SYNTHETIC_LAMBDA_CTR_MAX
+        )
+    if name == "learned":
+        return LearnedPacingController.load(
+            LEARNED_PACING_MODEL_PATH,
+            lambda_delivery_max=SYNTHETIC_LAMBDA_DELIVERY_MAX,
+            lambda_ctr_max=SYNTHETIC_LAMBDA_CTR_MAX,
+        )
+    raise ValueError(f"Unknown --pacing value: {name!r}")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pacing", choices=["analytic", "learned"], default="analytic")
+    args = parser.parse_args()
+
     world = load_world(WORLD_PATH)
     with open(SCENARIOS_PATH) as f:
         scenarios = yaml.safe_load(f)["scenarios"]
 
     environment = SyntheticEnvironment(world)
+    pacing_controller = build_pacing_controller(args.pacing)
 
     results = []
     n_delivery_met = 0
@@ -83,6 +113,7 @@ def main() -> None:
             outcome_seed=OUTCOME_SEED,
             max_overrun_multiple=MAX_OVERRUN_MULTIPLE,
             track_trajectory=True,
+            pacing_controller=pacing_controller,
         )
         result["elapsed_seconds"] = round(time.time() - t0, 1)
         results.append(result)
@@ -109,7 +140,8 @@ def main() -> None:
     )
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / "synthetic_bandit_results.json"
+    suffix = "" if args.pacing == "analytic" else f".{args.pacing}_pacing"
+    out_path = REPORTS_DIR / f"synthetic_bandit_results{suffix}.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Wrote results -> {out_path}")
