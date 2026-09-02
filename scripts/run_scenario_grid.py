@@ -7,6 +7,7 @@ per-campaign scenario set instead.
 Same fixed seeds / no-checkpointing rationale as run_synthetic_bandit.py.
 """
 
+import argparse
 import json
 import sys
 import time
@@ -24,6 +25,9 @@ from adtech_rtb.synthetic import (  # noqa: E402
     simulate_synthetic_flight,
 )
 from adtech_rtb.synthetic_world import load_world  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from run_synthetic_bandit import build_pacing_controller  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORLD_PATH = REPO_ROOT / "data" / "interim" / "synthetic_world.json"
@@ -43,11 +47,16 @@ MAX_OVERRUN_MULTIPLE = 6.0
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pacing", choices=["analytic", "learned"], default="analytic")
+    args = parser.parse_args()
+
     world = load_world(WORLD_PATH)
     with open(SCENARIOS_PATH) as f:
         scenarios = yaml.safe_load(f)["scenarios"]
 
     environment = SyntheticEnvironment(world)
+    pacing_controller = build_pacing_controller(args.pacing)
 
     results = []
     for s in scenarios:
@@ -68,6 +77,7 @@ def main() -> None:
             outcome_seed=OUTCOME_SEED,
             max_overrun_multiple=MAX_OVERRUN_MULTIPLE,
             track_trajectory=True,
+            pacing_controller=pacing_controller,
         )
         result["elapsed_seconds"] = round(time.time() - t0, 1)
         result["duration"] = s["duration"]
@@ -97,7 +107,8 @@ def main() -> None:
     )
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / "synthetic_scenario_grid_results.json"
+    suffix = "" if args.pacing == "analytic" else f".{args.pacing}_pacing"
+    out_path = REPORTS_DIR / f"synthetic_scenario_grid_results{suffix}.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Wrote results -> {out_path}")
