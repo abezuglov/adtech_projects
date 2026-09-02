@@ -37,3 +37,10 @@ Thumbs.db
 # stay tracked.
 reports/synthetic_bandit_results*.json
 reports/synthetic_scenario_grid_results*.json
+
+# Raw hindsight-pacing training dataset (~7MB, fully regenerable via
+# scripts/generate_hindsight_pacing_data.py, ~1hr). The small fitted model
+# it produces (data/interim/learned_pacing_model.json) is already covered by
+# data/interim/'s own ignore rule above, for the same reason -- regenerate
+# via scripts/fit_learned_pacing.py rather than committing either artifact.
+reports/hindsight_pacing_dataset.npz
