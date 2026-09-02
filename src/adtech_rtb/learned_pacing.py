@@ -22,7 +22,29 @@ from .pacing import ctr_error, pacing_error
 # construction in extract_training_pairs -- both are responsible for the
 # same feature order/definition, since a model fit on one and evaluated with
 # the other would silently score wrong-column features against each weight.
-STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "pacing_error_sq_behind", "ctr_error", "delivered_fraction")
+#
+# `overrun_x_pacing_error`/`overrun_x_ctr_error` ADDED (2026-09-02): found via
+# grid-90d-highctr-challenging's trajectory that lambda_delivery/lambda_ctr
+# both collapse right as elapsed_fraction crosses 1.0, even 20% short of
+# target -- a linear model can only give elapsed_fraction and pacing_error
+# additive, independent effects, so it can't represent "once overdue, being
+# behind should matter MORE, not less" (needed only in that AND-of-two-
+# conditions regime, everywhere else elapsed_fraction rising while on pace
+# correctly signals no extra reaction is needed). These two interaction
+# terms are exactly 0 while elapsed_fraction<=1 (no effect on any
+# already-validated on-time behavior) and only activate once BOTH overdue
+# and still behind/below floor, giving the fit a dedicated slope for that
+# combination instead of forcing it through the same two independent terms
+# used everywhere else.
+STATE_FEATURE_NAMES = (
+    "elapsed_fraction",
+    "pacing_error",
+    "pacing_error_sq_behind",
+    "ctr_error",
+    "delivered_fraction",
+    "overrun_x_pacing_error",
+    "overrun_x_ctr_error",
+)
 
 
 def pacing_state_features(
@@ -33,7 +55,7 @@ def pacing_state_features(
     ctr_floor: float,
     pace_convexity: float = 1.0,
 ) -> np.ndarray:
-    """The same 5 features hindsight_pacing.extract_training_pairs computes
+    """The same 7 features hindsight_pacing.extract_training_pairs computes
     per trajectory step, computed here from live simulate_synthetic_flight
     state instead of a stored trajectory. Reuses pacing.py's own
     pacing_error/ctr_error rather than reimplementing them, so a future
@@ -42,13 +64,26 @@ def pacing_state_features(
     extract_training_pairs for the full rationale) lets the fit react
     superlinearly once genuinely far behind pace, without changing its
     behavior in the mild-deficit regime a single linear pacing_error term
-    already handles reasonably.
+    already handles reasonably. `overrun_x_pacing_error`/`overrun_x_ctr_error`
+    (see STATE_FEATURE_NAMES's own comment) give the fit a dedicated slope
+    for "overdue AND still behind/below floor" instead of relying on
+    elapsed_fraction and pacing_error/ctr_error's independent, additive
+    effects to somehow cover that combination too.
     """
     p_err = pacing_error(delivered, target_impressions, elapsed_fraction, pace_convexity)
     c_err = ctr_error(running_ctr, ctr_floor, delivered)
     p_err_sq_behind = max(0.0, p_err) ** 2
+    overrun_fraction = max(0.0, elapsed_fraction - 1.0)
     return np.array(
-        [min(elapsed_fraction, 3.0), p_err, p_err_sq_behind, c_err, delivered / max(target_impressions, 1)]
+        [
+            min(elapsed_fraction, 3.0),
+            p_err,
+            p_err_sq_behind,
+            c_err,
+            delivered / max(target_impressions, 1),
+            overrun_fraction * max(0.0, p_err),
+            overrun_fraction * max(0.0, c_err),
+        ]
     )
 
 

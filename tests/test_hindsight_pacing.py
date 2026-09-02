@@ -124,14 +124,16 @@ def test_extract_training_pairs_state_target_alignment():
     # Step 0: elapsed_fraction=0.5, delivered=50/target=100 exactly on a
     # linear (pace_convexity=1.0) pace -> pacing_error=0 -> sq_behind=0;
     # running_ctr=0.02 vs floor=0.01 -> ctr_error=(0.01-0.02)/0.01=-1.0;
-    # delivered_fraction=0.5.
-    np.testing.assert_allclose(X[0], [0.5, 0.0, 0.0, -1.0, 0.5])
+    # delivered_fraction=0.5. overrun_fraction=max(0, 0.5-1)=0 -> both
+    # overrun interaction terms are 0 regardless of pacing_error/ctr_error.
+    np.testing.assert_allclose(X[0], [0.5, 0.0, 0.0, -1.0, 0.5, 0.0, 0.0])
     np.testing.assert_allclose(y[0], [0.1, 0.0])
 
     # Step 1: elapsed_fraction=1.0, delivered=100/target=100 exactly on pace
     # -> pacing_error=0 -> sq_behind=0; same running_ctr/floor -> ctr_error=-1.0;
-    # delivered_fraction=1.0.
-    np.testing.assert_allclose(X[1], [1.0, 0.0, 0.0, -1.0, 1.0])
+    # delivered_fraction=1.0. overrun_fraction=max(0, 1.0-1)=0 (not yet past
+    # nominal length) -> both overrun interaction terms still 0.
+    np.testing.assert_allclose(X[1], [1.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0])
     np.testing.assert_allclose(y[1], [0.2, 0.0])
 
 

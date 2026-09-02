@@ -1,0 +1,98 @@
+[
+  {
+    "scenario_id": "synth-pacing-tight-1-1",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.214946,
+    "naive_cpm": 288.54,
+    "n_rows": 4329,
+    "max_elapsed_fraction": 0.823,
+    "elapsed_seconds": 862.6
+  },
+  {
+    "scenario_id": "synth-pacing-tight-1-2",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.221162,
+    "naive_cpm": 288.48,
+    "n_rows": 6250,
+    "max_elapsed_fraction": 0.736,
+    "elapsed_seconds": 1099.9
+  },
+  {
+    "scenario_id": "synth-pacing-tight-2-1",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.1
+    },
+    "winner_loss": 0.224633,
+    "naive_cpm": 288.65,
+    "n_rows": 6330,
+    "max_elapsed_fraction": 0.773,
+    "elapsed_seconds": 1109.4
+  },
+  {
+    "scenario_id": "synth-pacing-tight-2-2",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.160262,
+    "naive_cpm": 288.56,
+    "n_rows": 4268,
+    "max_elapsed_fraction": 0.874,
+    "elapsed_seconds": 862.8
+  },
+  {
+    "scenario_id": "synth-pacing-tight-3-1",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.187546,
+    "naive_cpm": 288.54,
+    "n_rows": 6256,
+    "max_elapsed_fraction": 0.814,
+    "elapsed_seconds": 1099.8
+  },
+  {
+    "scenario_id": "synth-pacing-tight-3-2",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.20887,
+    "naive_cpm": 288.56,
+    "n_rows": 4277,
+    "max_elapsed_fraction": 0.871,
+    "elapsed_seconds": 860.9
+  },
+  {
+    "scenario_id": "synth-pacing-tight-4-1",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.190559,
+    "naive_cpm": 288.65,
+    "n_rows": 4279,
+    "max_elapsed_fraction": 0.874,
+    "elapsed_seconds": 859.8
+  },
+  {
+    "scenario_id": "synth-pacing-tight-4-2",
+    "winner_params": {
+      "pace_convexity": 0.7,
+      "eta_delivery": 0.2
+    },
+    "winner_loss": 0.186859,
+    "naive_cpm": 288.56,
+    "n_rows": 4277,
+    "max_elapsed_fraction": 0.804,
+    "elapsed_seconds": 855.6
+  }
+]

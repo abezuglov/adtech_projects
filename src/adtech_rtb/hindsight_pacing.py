@@ -183,7 +183,15 @@ def _sub_result_from_suffix(trajectory: list[dict], start_idx: int, scenario: di
     }
 
 
-STATE_FEATURE_NAMES = ("elapsed_fraction", "pacing_error", "pacing_error_sq_behind", "ctr_error", "delivered_fraction")
+STATE_FEATURE_NAMES = (
+    "elapsed_fraction",
+    "pacing_error",
+    "pacing_error_sq_behind",
+    "ctr_error",
+    "delivered_fraction",
+    "overrun_x_pacing_error",
+    "overrun_x_ctr_error",
+)
 
 
 def extract_training_pairs(
@@ -223,6 +231,10 @@ def extract_training_pairs(
             # behind-pace only (max(0, .)) -- being AHEAD of pace never
             # needs a superlinear reaction, only behind does.
             p_err_sq_behind = max(0.0, p_err) ** 2
+            # overrun_x_pacing_error/overrun_x_ctr_error: see
+            # learned_pacing.STATE_FEATURE_NAMES's comment for why these were
+            # added -- must stay in sync with pacing_state_features there.
+            overrun_fraction = max(0.0, elapsed_fraction - 1.0)
             features = np.array(
                 [
                     min(elapsed_fraction, 3.0),
@@ -230,6 +242,8 @@ def extract_training_pairs(
                     p_err_sq_behind,
                     c_err,
                     step["cumulative_delivered"] / max(scenario["target_impressions"], 1),
+                    overrun_fraction * max(0.0, p_err),
+                    overrun_fraction * max(0.0, c_err),
                 ]
             )
             rows.append((loss, features, step["lambda_delivery"], step["lambda_ctr"]))

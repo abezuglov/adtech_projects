@@ -28,23 +28,35 @@ MODEL_PATH = REPO_ROOT / "data" / "interim" / "learned_pacing_model.json"
 
 
 def _upgrade_legacy_dataset(X: np.ndarray) -> np.ndarray:
-    """The cached Stage 2 dataset (reports/hindsight_pacing_dataset.npz) was
-    generated before `pacing_error_sq_behind` existed -- it has 4 columns
-    (elapsed_fraction, pacing_error, ctr_error, delivered_fraction), one
-    short of the current 5-feature STATE_FEATURE_NAMES. Rather than re-run
-    the ~1hr hindsight search just to add a feature that's a deterministic
-    function of a column already in the dataset, derive it here and insert
-    it in the right slot. A full regeneration (generate_hindsight_pacing_data.py)
-    would produce the 5-column version natively -- this is a one-time bridge,
-    not the long-term path.
+    """The cached Stage 2 dataset (reports/hindsight_pacing_dataset.npz) may
+    predate later additions to STATE_FEATURE_NAMES. Every column added so far
+    has been a deterministic function of columns already present, so rather
+    than re-run the ~30min hindsight search each time, each step below
+    derives one generation's missing column(s) from the previous and inserts
+    them in the right slot -- chained so a dataset from any prior generation
+    upgrades straight to current. A full regeneration
+    (generate_hindsight_pacing_data.py) would produce the current version
+    natively -- this is a bridge, not the long-term path.
+
+    Gen 0 -> 1 (4 cols -> 5): insert `pacing_error_sq_behind` after
+    `pacing_error`.
+    Gen 1 -> 2 (5 cols -> 7): append `overrun_x_pacing_error`,
+    `overrun_x_ctr_error` -- see learned_pacing.STATE_FEATURE_NAMES's comment.
     """
     if X.shape[1] == len(STATE_FEATURE_NAMES):
         return X
-    if X.shape[1] != len(STATE_FEATURE_NAMES) - 1:
-        raise ValueError(f"Unexpected feature count {X.shape[1]}, expected {len(STATE_FEATURE_NAMES)} or {len(STATE_FEATURE_NAMES) - 1}")
-    pacing_error_col = X[:, 1]
-    sq_behind = np.maximum(pacing_error_col, 0.0) ** 2
-    return np.concatenate([X[:, :2], sq_behind[:, None], X[:, 2:]], axis=1)
+    if X.shape[1] not in (4, 5):
+        raise ValueError(f"Unexpected feature count {X.shape[1]}, expected one of 4, 5, {len(STATE_FEATURE_NAMES)}")
+    if X.shape[1] == 4:
+        pacing_error_col = X[:, 1]
+        sq_behind = np.maximum(pacing_error_col, 0.0) ** 2
+        X = np.concatenate([X[:, :2], sq_behind[:, None], X[:, 2:]], axis=1)
+    # Now 5 columns: elapsed_fraction, pacing_error, pacing_error_sq_behind, ctr_error, delivered_fraction.
+    elapsed_fraction, pacing_error_col, ctr_error_col = X[:, 0], X[:, 1], X[:, 3]
+    overrun_fraction = np.maximum(0.0, elapsed_fraction - 1.0)
+    overrun_x_pacing_error = overrun_fraction * np.maximum(0.0, pacing_error_col)
+    overrun_x_ctr_error = overrun_fraction * np.maximum(0.0, ctr_error_col)
+    return np.concatenate([X, overrun_x_pacing_error[:, None], overrun_x_ctr_error[:, None]], axis=1)
 
 
 def main() -> None:

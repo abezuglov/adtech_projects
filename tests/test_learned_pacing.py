@@ -22,7 +22,7 @@ def test_pacing_state_features_shape_and_order():
     features = pacing_state_features(
         delivered=50, target_impressions=100, elapsed_fraction=0.5, running_ctr=0.02, ctr_floor=0.01
     )
-    assert features.shape == (5,)
+    assert features.shape == (7,)
     # delivered_fraction is the last feature.
     assert features[4] == 0.5
 
@@ -47,8 +47,8 @@ def test_pacing_state_features_sq_behind_matches_squared_error_when_behind():
 def test_learned_pacing_controller_clips_to_lambda_max():
     # Extreme positive weights should still be clipped at lambda_delivery_max/lambda_ctr_max.
     controller = LearnedPacingController(
-        delivery_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ctr_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        delivery_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ctr_weights=[100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         lambda_delivery_max=1.5,
         lambda_ctr_max=1.5,
     )
@@ -67,8 +67,8 @@ def test_learned_pacing_controller_clips_to_lambda_max():
 
 def test_learned_pacing_controller_clips_to_zero():
     controller = LearnedPacingController(
-        delivery_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ctr_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        delivery_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ctr_weights=[-100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         lambda_delivery_max=1.5,
         lambda_ctr_max=1.5,
     )

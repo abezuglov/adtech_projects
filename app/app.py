@@ -1,7 +1,7 @@
 """Live Streamlit demo: replay one synthetic delivery scenario batch-by-
-batch, showing the bandit's behavior against a FAIR naive flat-bid baseline
-(same discretized bid grid, not naive's own unconstrained continuous bid --
-see below) as the flight progresses.
+batch, showing the bandit's behavior against a FAIR oracle flat-bid baseline
+(same discretized bid grid, not the oracle baseline's own unconstrained
+continuous bid -- see below) as the flight progresses.
 
 Design: this app does NOT run the simulator itself. A synthetic flight is
 pure numpy but still takes minutes per scenario at the pipeline's real
@@ -22,14 +22,18 @@ controller, not the hand-tuned analytic Lagrangian formula -- see
 learned_pacing.py) at the default 6 discretized bid levels. This is a
 deliberate choice, not the only config that was ever run: the analytic
 pacing controller, re-tuned for near-ceiling delivery targets, no longer
-beats even a fair naive baseline on CPM (see reports/pacing_comparison.json
+beats even a fair oracle baseline on CPM (see reports/pacing_comparison.json
 and the README's "Learned pacing" section for the full comparison) -- it's
 reliable (hits delivery + CTR floor everywhere) but not cost-competitive.
-Learned pacing recovers that, landing at ~parity with naive on average and
-ahead of it on the hardest ("challenging") scenarios.
+Learned pacing recovers most of that gap (-2.7% avg CPM vs. the oracle
+baseline, 9/20 scenarios won outright) and pulls ahead of it on every one of
+the hardest ("challenging") scenarios -- see the README's "Learned pacing"
+section for the 2026-09-02 retrain this reflects (fixed both CTR-floor
+misses and improved overrun on all 20 scenarios, at some cost to average
+CPM competitiveness).
 
-Naive's own baseline is deliberately solved over the SAME 6-level discrete
-grid the bandit is confined to (`--bid-levels 6`), not naive's own
+The oracle baseline is deliberately solved over the SAME 6-level discrete
+grid the bandit is confined to (`--bid-levels 6`), not its own
 unconstrained continuous bid -- solve_delivery_bid_synthetic's default
 bisection search picks any real-valued bid, which is an advantage no
 discretized policy has. Comparing the bandit against that continuous
@@ -169,9 +173,9 @@ def build_frames(scenario_id: str):
     # between consecutive frames -- coarser than per-batch resolution when
     # downsampled to MAX_FRAMES, but that's the right amount of smoothing
     # for a chart meant to show pacing steadiness rather than per-batch
-    # noise). A perfectly steady flight is a horizontal line here; naive's
-    # is exactly horizontal by construction (see fig4 below), which is what
-    # the bandit's own rate is being judged against.
+    # noise). A perfectly steady flight is a horizontal line here; the
+    # oracle baseline's is exactly horizontal by construction (see fig4
+    # below), which is what the bandit's own rate is being judged against.
     rate_delivered = []
     rate_opportunities = []
     for idx in range(len(days)):
@@ -201,10 +205,11 @@ def build_frames(scenario_id: str):
 
 st.title("RTB Campaign Delivery Optimizer — Live Bandit Demo")
 st.caption(
-    "The power of context: naive knows the true auction economics perfectly but must bid one flat number "
-    "for the whole campaign; the bandit starts knowing nothing but can price by placement and time. "
-    "Replaying a precomputed flight batch-by-batch — see the [repo README](https://github.com/abezuglov/adtech_projects) for the full result."
+    "The power of context: the oracle baseline knows the true auction economics perfectly but must bid "
+    "one flat number for the whole campaign; the bandit starts knowing nothing but can price by placement "
+    "and time. Replaying a precomputed flight batch-by-batch — see the [repo README](https://github.com/abezuglov/adtech_projects) for the full result."
 )
+st.page_link("pages/1_Report.py", label="Read the full report", icon="\U0001F4C4")
 
 scenarios = get_scenarios()
 naive_results = get_naive_results()
@@ -227,7 +232,7 @@ scenario, result = data["scenario"], data["result"]
 naive = naive_results[scenario_id]
 n_frames = data["n_frames"]
 
-# Nominal flight_length_days is sized to the naive flat bid's expected pace
+# Nominal flight_length_days is sized to the oracle baseline's expected pace
 # (see generate_synthetic_scenarios), not to the bandit's. Under the CTR
 # floor the bandit bids more conservatively and needs more calendar time to
 # hit the same delivery target -- simulate_synthetic_flight explicitly
@@ -289,10 +294,10 @@ def render(i: int):
         m[1].metric(
             "Bandit CPM (so far)",
             f"{bandit_cpm:.1f}",
-            f"{(bandit_cpm - naive_cpm):+.1f} vs naive {naive_cpm:.1f}",
+            f"{(bandit_cpm - naive_cpm):+.1f} vs oracle baseline {naive_cpm:.1f}",
             delta_color="inverse",
         )
-        m[2].metric("Running CTR", f"{ctr:.5f}", f"floor {floor:.5f}")
+        m[2].metric("Running CTR", f"{ctr:.5f}", f"{ctr - floor:+.5f} vs floor {floor:.5f}")
         m[3].metric("Day", f"{data['days'][i]:.1f}", f"nominal length {scenario['flight_length_days']}d")
 
         p1, p2 = st.columns(2)
@@ -301,7 +306,11 @@ def render(i: int):
         with p2:
             ctr_frac = min(ctr / floor, 1.5) / 1.5 if floor > 0 else 0.0
             met = ctr >= floor
-            st.progress(ctr_frac, text=f"CTR vs floor: {'above' if met else 'below'} ({ctr:.5f} / {floor:.5f})")
+            status_icon = "🟢" if met else "🔴"
+            st.progress(
+                ctr_frac,
+                text=f"{status_icon} CTR vs floor: {'above' if met else 'below'} ({ctr:.5f} / {floor:.5f})",
+            )
 
         c1, c2 = st.columns(2)
         with c1:
@@ -311,9 +320,16 @@ def render(i: int):
                     x=data["days"][: i + 1], y=data["cum_cpm"][: i + 1], mode="lines", name="Bandit (cumulative CPM)"
                 )
             )
-            fig.add_hline(y=naive_cpm, line_dash="dash", line_color="gray", annotation_text="Naive flat-bid CPM")
+            fig.add_hline(y=naive_cpm, line_dash="dash", line_color="gray", annotation_text="Oracle flat-bid CPM")
+            fig.add_vline(
+                x=scenario["flight_length_days"],
+                line_dash="dot",
+                line_color="#888",
+                annotation_text="nominal length",
+                annotation_position="top",
+            )
             fig.update_layout(
-                title="CPM: bandit vs. naive baseline",
+                title="CPM: bandit vs. oracle baseline",
                 xaxis_title="Day",
                 yaxis_title="RMB / CPM",
                 height=320,
@@ -337,6 +353,13 @@ def render(i: int):
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(x=data["days"][: i + 1], y=data["lambda_delivery"][: i + 1], name="lambda_delivery"))
         fig3.add_trace(go.Scatter(x=data["days"][: i + 1], y=data["lambda_ctr"][: i + 1], name="lambda_ctr"))
+        fig3.add_vline(
+            x=scenario["flight_length_days"],
+            line_dash="dot",
+            line_color="#888",
+            annotation_text="nominal length",
+            annotation_position="top",
+        )
         fig3.update_layout(
             title="Lagrangian pacing pressure (dual variables)",
             xaxis_title="Day",
@@ -347,8 +370,9 @@ def render(i: int):
         st.plotly_chart(fig3, width='stretch', key=f"lambda_chart_{seq}")
 
         # Rate (derivative), not cumulative: a steady flight reads as a flat
-        # horizontal line here, and naive's constant-rate baseline literally
-        # is one (added via add_hline, not a traced series) -- deviations of
+        # horizontal line here, and the oracle baseline's constant-rate
+        # trajectory literally is one (added via add_hline, not a traced
+        # series) -- deviations of
         # the bandit's actual delivery rate from flat are exactly what
         # delivery_cv is scoring, made visible instead of hidden inside a
         # cumulative curve's slope.
@@ -371,9 +395,16 @@ def render(i: int):
             )
         )
         naive_rate = target / scenario["flight_length_days"]
-        fig4.add_hline(y=naive_rate, line_dash="dash", line_color="gray", annotation_text="Naive ideal rate")
+        fig4.add_hline(y=naive_rate, line_dash="dash", line_color="gray", annotation_text="Oracle baseline's ideal rate")
+        fig4.add_vline(
+            x=scenario["flight_length_days"],
+            line_dash="dot",
+            line_color="#888",
+            annotation_text="nominal length",
+            annotation_position="top",
+        )
         fig4.update_layout(
-            title="Delivery pacing rate: derivative of delivered vs. opportunities, vs. naive's constant rate",
+            title="Delivery pacing rate: derivative of delivered vs. opportunities, vs. the oracle baseline's constant rate",
             xaxis_title="Day",
             yaxis_title="Impressions / day",
             height=320,
@@ -399,15 +430,15 @@ st.subheader("Full-flight result (validated, matches reports/synthetic_bandit_re
 final_cpm = result["spend"] / max(result["delivered_impressions"], 1) * 1000
 cpm_improvement = (naive["cpm"] - final_cpm) / naive["cpm"]
 r = st.columns(5)
-r[0].metric("Final CPM", f"{final_cpm:.1f}", f"{cpm_improvement:+.1%} vs naive")
-r[1].metric("Total spend", f"{result['spend']:,.0f}", f"naive {naive['expected_spend']:,.0f}")
+r[0].metric("Final CPM", f"{final_cpm:.1f}", f"{cpm_improvement:+.1%} vs oracle baseline")
+r[1].metric("Total spend", f"{result['spend']:,.0f}", f"oracle baseline {naive['expected_spend']:,.0f}")
 r[2].metric("Delivery met", "Yes" if result["delivery_met"] else "No", f"{result['overrun_ratio']:.2f}x nominal length")
 r[3].metric("CTR floor met", "Yes" if result["ctr_met"] else "No")
 r[4].metric("Delivery smoothness (CV)", f"{result['delivery_cv']:.2f}", "lower = steadier")
 
 st.caption(
-    "Naive baseline is a closed-form constant flat bid, solved over the SAME 6-level discrete bid grid the "
-    "bandit uses (see solve_delivery_bid_synthetic's bid_levels option) -- not naive's own unconstrained "
+    "The oracle baseline is a closed-form constant flat bid, solved over the SAME 6-level discrete bid grid the "
+    "bandit uses (see solve_delivery_bid_synthetic's bid_levels option) -- not its own unconstrained "
     "continuous bid, which was found to inflate the apparent gap. Under first-price auctions its CPM is "
     "exactly the solved bid, shown as the dashed reference line above. "
     "See the [repo README](https://github.com/abezuglov/adtech_projects) for the full methodology, including why "
